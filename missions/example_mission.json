@@ -1,0 +1,61 @@
+{
+  "connection_url": "serial:///dev/ttyAMA0:57600",
+  "takeoff_altitude_m": 5.0,
+  "initial_takeoff_altitude_m": 1.2,
+  "slow_takeoff_step_m": 0.5,
+  "slow_takeoff_step_hold_s": 2.0,
+  "hover_before_mission_s": 20.0,
+  "return_to_launch_on_complete": true,
+  "land_at_final_waypoint": false,
+  "waypoint_acceptance_radius_m": 3.0,
+  "waypoint_timeout_s": 90,
+  "max_mission_time_s": 600,
+  "geofence_radius_m": 25.0,
+  "max_altitude_agl_m": 8.0,
+  "gps_min_satellites": 8,
+  "gps_loss_grace_s": 5.0,
+  "telemetry_timeout_s": 3.0,
+  "low_battery_percent": 0.3,
+  "critical_battery_percent": 0.2,
+  "low_battery_action": "return",
+  "prearm_health_timeout_s": 120,
+  "hotspot_containment": {
+    "enabled": true,
+    "temporary_remove_later": true,
+    "max_radius_m": 20.0,
+    "network_watchdog_enabled": true,
+    "drone_id": "drone-1",
+    "expected_peer_ids": [
+      "drone-2"
+    ],
+    "udp_port": 50555,
+    "broadcast_ip": "255.255.255.255",
+    "peer_unicast_ips": [],
+    "heartbeat_interval_s": 1.0,
+    "peer_timeout_s": 5.0,
+    "require_peers_before_arm": true
+  },
+  "mission": [
+    {
+      "name": "north-10",
+      "north_m": 10.0,
+      "east_m": 0.0,
+      "relative_altitude_m": 5.0,
+      "hold_s": 3.0
+    },
+    {
+      "name": "east-10",
+      "north_m": 10.0,
+      "east_m": 10.0,
+      "relative_altitude_m": 5.0,
+      "hold_s": 3.0
+    },
+    {
+      "name": "home-offset",
+      "north_m": 0.0,
+      "east_m": 0.0,
+      "relative_altitude_m": 5.0,
+      "hold_s": 2.0
+    }
+  ]
+}

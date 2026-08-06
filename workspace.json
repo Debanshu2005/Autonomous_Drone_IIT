@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-06T11:40:47.183Z",
+  "generatedAtEpochMs": 1786016447183,
+  "generator": {
+    "name": "Code Janitor",
+    "feature": "workspace-memory"
+  },
+  "handoffGuidance": [
+    "Read graphify-out/GRAPH_REPORT.md first for architecture and dependency questions.",
+    "Use workspace.json for machine-readable repo context before scanning broad parts of the repository.",
+    "Use graphify-out/WORKSPACE_MEMORY.md and workspacememory.md for human-readable handoff notes, recent changes, and Git-aware status."
+  ],
+  "workspace": {
+    "name": "Autonomous_Drone_IIT",
+    "root": "d:\\CityGrid\\my-project\\Autonomous_Drone_IIT",
+    "activeFile": null,
+    "refreshReason": "startup",
+    "outputFiles": {
+      "markdown": "graphify-out/WORKSPACE_MEMORY.md",
+      "markdownMirror": "workspacememory.md",
+      "structuredManifest": "workspace.json"
+    },
+    "suggestedStartingPoints": [],
+    "stats": {
+      "totalFiles": 0,
+      "topLevelAreas": [],
+      "primaryFileTypes": [],
+      "keyFiles": [],
+      "fileInventory": []
+    }
+  },
+  "package": {
+    "available": false,
+    "error": "package.json was not found."
+  },
+  "currentStack": {
+    "lastActivityAt": "",
+    "trackedChangeCount": 0,
+    "trackedFileSnapshotCount": 0,
+    "changeTypeCounts": {
+      "save": 0,
+      "create": 0,
+      "delete": 0,
+      "rename": 0
+    }
+  },
+  "trackedSnapshots": [],
+  "recentChanges": [],
+  "hotFiles": [],
+  "git": {
+    "available": false,
+    "branch": "",
+    "headSummary": "",
+    "statusSummary": "",
+    "changedFileCount": 0,
+    "statusLines": [],
+    "error": "fatal: not a git repository (or any of the parent directories): .git"
+  },
+  "github": {
+    "available": false,
+    "summary": "Could not determine the GitHub repository from origin remote: fatal: not a git repository (or any of the parent directories): .git"
+  },
+  "graphify": {
+    "reportAvailable": false,
+    "graphAvailable": false,
+    "reportPath": "",
+    "graphPath": "",
+    "highlights": ""
+  },
+  "projectPlanner": null,
+  "agentNotes": [
+    "For recent repo changes, check recentChanges, trackedSnapshots, hotFiles, and git.",
+    "For architecture questions, combine graphify highlights with the Graphify report.",
+    "For machine-readable repo context, prefer this workspace.json manifest before broad repo scans."
+  ]
+}
