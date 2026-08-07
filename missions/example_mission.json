@@ -1,5 +1,5 @@
 {
-  "connection_url": "serial:///dev/ttyAMA0:57600",
+  "connection_url": "udp://:14550",
   "takeoff_altitude_m": 5.0,
   "initial_takeoff_altitude_m": 1.2,
   "slow_takeoff_step_m": 0.5,

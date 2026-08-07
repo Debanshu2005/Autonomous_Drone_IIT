@@ -31,14 +31,21 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Connect the Pi UART/USB to the Pixhawk telemetry port and set the mission `connection_url`.
+Connect the Pi and Pixhawk on the same Ethernet network and configure the Pixhawk
+to send MAVLink UDP traffic to the Raspberry Pi IP address on port `14550`.
+The mission `connection_url` is set for Ethernet/UDP by default:
+
+```text
+udp://:14550
+```
 
 Common URLs:
 
 ```text
+udp://:14550
+udp://:14540
 serial:///dev/ttyAMA0:57600
 serial:///dev/ttyUSB0:57600
-udp://:14540
 ```
 
 ## Run

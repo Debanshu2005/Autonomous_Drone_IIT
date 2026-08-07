@@ -1,6 +1,6 @@
 # Workspace Memory
 This file is maintained automatically by Code Janitor so Claude, Codex, Bob, and any other AI agent can reuse repo context without rescanning everything from scratch.
-Generated: 2026-08-06T11:40:47.183Z
+Generated: 2026-08-07T06:19:54.267Z
 Workspace: Autonomous_Drone_IIT
 Workspace root: d:\CityGrid\my-project\Autonomous_Drone_IIT
 Refresh reason: startup
@@ -18,22 +18,22 @@ Structured manifest: workspace.json
 - Graphify graph: not available yet
 - Last activity: no tracked activity yet
 ## Workspace Focus
-- Active file in focus: No active file detected
+- Active file in focus: src/autonomous_mission.py
 - Hottest files right now: none yet
-- Suggested starting points: none detected
+- Suggested starting points: src/autonomous_mission.py, README.md
 ## Current Workspace
-- Active file: No active file detected
-- Tracked files in snapshot: 0
-- Top-level areas: none
-- Primary file types: none
-- Key files: none detected
+- Active file: src/autonomous_mission.py
+- Tracked files in snapshot: 7
+- Top-level areas: [root] (4), docs (1), missions (1), src (1)
+- Primary file types: .md (3), .json (2), .py (1), .txt (1)
+- Key files: README.md
 ## Package Snapshot
 - Package metadata unavailable: package.json was not found.
 ## Current Stack
 - Logged change events: 0
 - Change mix: none yet
 - Remembered file snapshots: 0
-- Working tree summary: fatal: not a git repository (or any of the parent directories): .git
+- Working tree summary: clean
 ## Tracked Snapshots
 - No remembered file snapshots yet.
 
@@ -44,10 +44,13 @@ Structured manifest: workspace.json
 - No hotspots yet.
 
 ## Git Snapshot
-- fatal: not a git repository (or any of the parent directories): .git
+- Branch: master
+- HEAD: 2026-08-06 87c9c09 First commit
+- Working tree summary: clean
+- Working tree: clean
 
 ## GitHub Snapshot
-GitHub context unavailable: Could not determine the GitHub repository from origin remote: fatal: not a git repository (or any of the parent directories): .git
+GitHub context unavailable: GitHub API request failed with 404. Not Found Configure the GitHub token in SecretStorage or GITHUB_TOKEN if the repository is private or rate-limited.
 
 ## Graphify Snapshot
 Graphify report not found. Generate Graphify output if you want architecture-aware memory excerpts here.

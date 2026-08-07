@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-06T11:40:47.183Z",
-  "generatedAtEpochMs": 1786016447183,
+  "generatedAt": "2026-08-07T06:19:54.267Z",
+  "generatedAtEpochMs": 1786083594267,
   "generator": {
     "name": "Code Janitor",
     "feature": "workspace-memory"
@@ -14,20 +14,102 @@
   "workspace": {
     "name": "Autonomous_Drone_IIT",
     "root": "d:\\CityGrid\\my-project\\Autonomous_Drone_IIT",
-    "activeFile": null,
+    "activeFile": "src/autonomous_mission.py",
     "refreshReason": "startup",
     "outputFiles": {
       "markdown": "graphify-out/WORKSPACE_MEMORY.md",
       "markdownMirror": "workspacememory.md",
       "structuredManifest": "workspace.json"
     },
-    "suggestedStartingPoints": [],
+    "suggestedStartingPoints": [
+      "src/autonomous_mission.py",
+      "README.md"
+    ],
     "stats": {
-      "totalFiles": 0,
-      "topLevelAreas": [],
-      "primaryFileTypes": [],
-      "keyFiles": [],
-      "fileInventory": []
+      "totalFiles": 7,
+      "topLevelAreas": [
+        {
+          "name": "[root]",
+          "count": 4
+        },
+        {
+          "name": "docs",
+          "count": 1
+        },
+        {
+          "name": "missions",
+          "count": 1
+        },
+        {
+          "name": "src",
+          "count": 1
+        }
+      ],
+      "primaryFileTypes": [
+        {
+          "name": ".md",
+          "count": 3
+        },
+        {
+          "name": ".json",
+          "count": 2
+        },
+        {
+          "name": ".py",
+          "count": 1
+        },
+        {
+          "name": ".txt",
+          "count": 1
+        }
+      ],
+      "keyFiles": [
+        "README.md"
+      ],
+      "fileInventory": [
+        {
+          "path": "docs/failsafe_checklist.md",
+          "topLevelArea": "docs",
+          "extension": ".md",
+          "isKeyFile": false
+        },
+        {
+          "path": "missions/example_mission.json",
+          "topLevelArea": "missions",
+          "extension": ".json",
+          "isKeyFile": false
+        },
+        {
+          "path": "README.md",
+          "topLevelArea": "[root]",
+          "extension": ".md",
+          "isKeyFile": true
+        },
+        {
+          "path": "requirements.txt",
+          "topLevelArea": "[root]",
+          "extension": ".txt",
+          "isKeyFile": false
+        },
+        {
+          "path": "src/autonomous_mission.py",
+          "topLevelArea": "src",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
+          "path": "workspace.json",
+          "topLevelArea": "[root]",
+          "extension": ".json",
+          "isKeyFile": false
+        },
+        {
+          "path": "workspacememory.md",
+          "topLevelArea": "[root]",
+          "extension": ".md",
+          "isKeyFile": false
+        }
+      ]
     }
   },
   "package": {
@@ -49,17 +131,17 @@
   "recentChanges": [],
   "hotFiles": [],
   "git": {
-    "available": false,
-    "branch": "",
-    "headSummary": "",
+    "available": true,
+    "branch": "master",
+    "headSummary": "2026-08-06 87c9c09 First commit",
     "statusSummary": "",
     "changedFileCount": 0,
     "statusLines": [],
-    "error": "fatal: not a git repository (or any of the parent directories): .git"
+    "error": ""
   },
   "github": {
     "available": false,
-    "summary": "Could not determine the GitHub repository from origin remote: fatal: not a git repository (or any of the parent directories): .git"
+    "summary": "GitHub API request failed with 404. Not Found Configure the GitHub token in SecretStorage or GITHUB_TOKEN if the repository is private or rate-limited."
   },
   "graphify": {
     "reportAvailable": false,
