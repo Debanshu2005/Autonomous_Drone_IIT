@@ -66,6 +66,12 @@ For SITL or bench testing:
 python3 src/autonomous_mission.py --config missions/example_mission.json --log-level DEBUG
 ```
 
+To view live Pixhawk telemetry without arming or flying:
+
+```bash
+python3 src/autonomous_mission.py --config missions/example_mission.json --telemetry-only
+```
+
 ## Important Setup
 
 Before flying, configure Pixhawk-side failsafes in QGroundControl or Mission Planner. The script is a second layer, not a replacement for flight-controller failsafes.

@@ -34,6 +34,7 @@ LOGGER = logging.getLogger("autonomous_mission")
 EARTH_RADIUS_M = 6378137.0
 DEFAULT_USB_SERIAL_BAUD = 115200
 USB_SERIAL_PATTERNS = ("ttyACM*", "ttyUSB*")
+REQUESTED_MAVLINK_STREAM_RATE_HZ = 2
 
 
 class MissionAbort(RuntimeError):
@@ -757,6 +758,168 @@ def distance_m(lat1_deg: float, lon1_deg: float, lat2_deg: float, lon2_deg: floa
     return EARTH_RADIUS_M * 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
 
 
+async def run_telemetry_monitor(config: MissionConfig) -> int:
+    request_mavlink_data_streams(config.connection_url)
+
+    drone = System()
+    await drone.connect(system_address=config.connection_url)
+    LOGGER.info("Connecting to vehicle at %s", config.connection_url)
+    async for state in drone.core.connection_state():
+        if state.is_connected:
+            LOGGER.info("Vehicle discovered")
+            break
+
+    telemetry = TelemetryCache(drone)
+    telemetry.start()
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except NotImplementedError:
+            pass
+
+    LOGGER.info("Streaming Pixhawk telemetry. Press Ctrl+C to stop.")
+    try:
+        while not stop_event.is_set():
+            LOGGER.info(format_telemetry_snapshot(telemetry))
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+    finally:
+        await telemetry.stop()
+    return 0
+
+
+def format_telemetry_snapshot(telemetry: TelemetryCache) -> str:
+    position = telemetry.position
+    gps_info = telemetry.gps_info
+    health = telemetry.health
+    battery = telemetry.battery
+
+    lat = format_number(getattr(position, "latitude_deg", None), precision=7)
+    lon = format_number(getattr(position, "longitude_deg", None), precision=7)
+    rel_alt = format_number(getattr(position, "relative_altitude_m", None), precision=1)
+    abs_alt = format_number(getattr(position, "absolute_altitude_m", None), precision=1)
+    sats = format_value(getattr(gps_info, "num_satellites", None))
+    fix = format_value(getattr(gps_info, "fix_type", None))
+    battery_voltage = format_number(getattr(battery, "voltage_v", None), precision=2)
+    battery_percent = format_percent(getattr(battery, "remaining_percent", None))
+    global_ok = format_bool(getattr(health, "is_global_position_ok", None))
+    home_ok = format_bool(getattr(health, "is_home_position_ok", None))
+
+    return (
+        f"armed={format_value(telemetry.armed)} "
+        f"in_air={format_value(telemetry.in_air)} "
+        f"mode={format_value(telemetry.flight_mode)} "
+        f"battery_v={battery_voltage} battery={battery_percent} "
+        f"gps_fix={fix} sats={sats} "
+        f"global_ok={global_ok} home_ok={home_ok} "
+        f"lat={lat} lon={lon} rel_alt_m={rel_alt} abs_alt_m={abs_alt}"
+    )
+
+
+def format_value(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return str(value)
+
+
+def format_bool(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return "yes" if bool(value) else "no"
+
+
+def format_number(value: Any, precision: int) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.{precision}f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def format_percent(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.0%}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def request_mavlink_data_streams(connection_url: str) -> None:
+    serial_connection = parse_serial_connection_url(connection_url)
+    if not serial_connection:
+        LOGGER.debug("Skipping MAVLink data stream request for non-serial URL: %s", connection_url)
+        return
+
+    device, baud = serial_connection
+    try:
+        from pymavlink import mavutil
+    except ImportError:
+        LOGGER.warning("pymavlink is not installed; skipping MAVLink data stream request")
+        return
+
+    master: Any = None
+    try:
+        master = mavutil.mavlink_connection(device, baud=baud)
+        heartbeat = master.wait_heartbeat(timeout=5)
+        if heartbeat is None:
+            LOGGER.warning("No MAVLink heartbeat while requesting data streams on %s", device)
+            return
+
+        requested_streams = [
+            ("EXTRA2", mavutil.mavlink.MAV_DATA_STREAM_EXTRA2),
+            ("EXTENDED_STATUS", mavutil.mavlink.MAV_DATA_STREAM_EXTENDED_STATUS),
+        ]
+        for stream_name, stream_id in requested_streams:
+            master.mav.request_data_stream_send(
+                master.target_system,
+                master.target_component,
+                stream_id,
+                REQUESTED_MAVLINK_STREAM_RATE_HZ,
+                1,
+            )
+        LOGGER.info(
+            "Requested MAVLink EXTRA2 and EXTENDED_STATUS data streams at %d Hz on %s",
+            REQUESTED_MAVLINK_STREAM_RATE_HZ,
+            device,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name == "serial":
+            LOGGER.warning("pyserial is not installed; skipping MAVLink data stream request")
+            return
+        raise
+    except Exception:
+        LOGGER.exception("Failed to request MAVLink data streams on %s", device)
+    finally:
+        if master:
+            master.close()
+
+
+def parse_serial_connection_url(connection_url: str) -> Optional[tuple[str, int]]:
+    if not connection_url.startswith("serial://"):
+        return None
+
+    serial_target = connection_url.removeprefix("serial://")
+    if ":" not in serial_target:
+        return None
+
+    device, baud_text = serial_target.rsplit(":", 1)
+    if not device:
+        return None
+
+    try:
+        baud = int(baud_text)
+    except ValueError:
+        return None
+
+    return device, baud
+
+
 async def amain() -> int:
     parser = argparse.ArgumentParser(description="Run a GPS-only autonomous drone mission")
     parser.add_argument(
@@ -771,6 +934,11 @@ async def amain() -> int:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Console logging verbosity",
     )
+    parser.add_argument(
+        "--telemetry-only",
+        action="store_true",
+        help="Connect and print live Pixhawk telemetry without arming or flying",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -778,6 +946,10 @@ async def amain() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     config = load_config(args.config)
+    if args.telemetry_only:
+        return await run_telemetry_monitor(config)
+
+    request_mavlink_data_streams(config.connection_url)
     mission = AutonomousMission(config)
 
     stop_event = asyncio.Event()
