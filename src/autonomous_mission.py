@@ -32,6 +32,8 @@ from mavsdk import System
 
 LOGGER = logging.getLogger("autonomous_mission")
 EARTH_RADIUS_M = 6378137.0
+DEFAULT_USB_SERIAL_BAUD = 115200
+USB_SERIAL_PATTERNS = ("ttyACM*", "ttyUSB*")
 
 
 class MissionAbort(RuntimeError):
@@ -108,8 +110,10 @@ class TelemetryCache:
         self.last_health_s = 0.0
         self.last_battery_s = 0.0
         self._tasks: list[asyncio.Task[None]] = []
+        self._stopping = False
 
     def start(self) -> None:
+        self._stopping = False
         self._tasks = [
             asyncio.create_task(self._watch("position", self.drone.telemetry.position())),
             asyncio.create_task(self._watch("gps_info", self.drone.telemetry.gps_info())),
@@ -121,6 +125,7 @@ class TelemetryCache:
         ]
 
     async def stop(self) -> None:
+        self._stopping = True
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -141,6 +146,9 @@ class TelemetryCache:
         except asyncio.CancelledError:
             raise
         except Exception:
+            if self._stopping:
+                LOGGER.debug("Telemetry stream stopped during shutdown: %s", name)
+                return
             LOGGER.exception("Telemetry stream failed: %s", name)
 
 
@@ -236,6 +244,7 @@ class AutonomousMission:
         self.mission_started_s = 0.0
         self._failsafe_started = asyncio.Event()
         self._low_battery_handled = False
+        self._arm_command_sent = False
 
     async def run(self) -> None:
         await self.drone.connect(system_address=self.config.connection_url)
@@ -279,7 +288,10 @@ class AutonomousMission:
             await self._return_to_launch(str(exc))
         except asyncio.CancelledError:
             LOGGER.warning("Mission cancelled")
-            await self._soft_land("mission cancelled")
+            if self._vehicle_may_need_failsafe():
+                await self._soft_land("mission cancelled")
+            else:
+                LOGGER.warning("Mission cancelled before arming; no landing command sent")
             raise
         except Exception:
             LOGGER.exception("Unexpected mission error")
@@ -341,6 +353,7 @@ class AutonomousMission:
         self.mission_started_s = time.monotonic()
         await self.drone.action.set_takeoff_altitude(self.config.initial_takeoff_altitude_m)
         LOGGER.info("Arming")
+        self._arm_command_sent = True
         await self.drone.action.arm()
         LOGGER.info(
             "Taking off slowly: initial %.1f m, final hover %.1f m",
@@ -524,6 +537,9 @@ class AutonomousMission:
         if self._failsafe_started.is_set():
             return
         self._failsafe_started.set()
+        if not self._vehicle_may_need_failsafe():
+            LOGGER.warning("Skipping LAND because the vehicle was not armed or in air: %s", reason)
+            return
         LOGGER.warning("Starting soft landing: %s", reason)
         try:
             await self.drone.action.land()
@@ -539,6 +555,9 @@ class AutonomousMission:
         if self._failsafe_started.is_set():
             return
         self._failsafe_started.set()
+        if not self._vehicle_may_need_failsafe():
+            LOGGER.warning("Skipping RTL because the vehicle was not armed or in air: %s", reason)
+            return
         LOGGER.warning("Starting RTL: %s", reason)
         try:
             await self.drone.action.return_to_launch()
@@ -559,6 +578,9 @@ class AutonomousMission:
                 return
             await asyncio.sleep(1.0)
         LOGGER.warning("Landing wait timed out; verify vehicle state manually")
+
+    def _vehicle_may_need_failsafe(self) -> bool:
+        return bool(self._arm_command_sent or self.telemetry.armed or self.telemetry.in_air)
 
     def _gps_is_usable(self, gps_info: Any, health: Any) -> bool:
         satellites = getattr(gps_info, "num_satellites", 0)
@@ -612,7 +634,7 @@ def load_config(path: Path) -> MissionConfig:
 
     config = MissionConfig(
         connection_url=normalize_connection_url(
-            str(raw.get("connection_url", "serial:///dev/serial0:115200"))
+            str(raw.get("connection_url", f"serial://auto:{DEFAULT_USB_SERIAL_BAUD}"))
         ),
         takeoff_altitude_m=float(raw.get("takeoff_altitude_m", 5.0)),
         initial_takeoff_altitude_m=float(raw.get("initial_takeoff_altitude_m", 1.2)),
@@ -641,11 +663,54 @@ def load_config(path: Path) -> MissionConfig:
 
 
 def normalize_connection_url(connection_url: str) -> str:
+    connection_url = connection_url.strip()
+    if connection_url == "serial://auto":
+        return autodetect_usb_serial_url(DEFAULT_USB_SERIAL_BAUD)
+    if connection_url.startswith("serial://auto:"):
+        baud_text = connection_url.removeprefix("serial://auto:")
+        try:
+            baud = int(baud_text)
+        except ValueError as exc:
+            raise ValueError(f"invalid auto serial baud: {baud_text}") from exc
+        return autodetect_usb_serial_url(baud)
     if connection_url.startswith("udp://:"):
         return connection_url.replace("udp://:", "udpin://0.0.0.0:", 1)
     if connection_url.startswith("udpin://:"):
         return connection_url.replace("udpin://:", "udpin://0.0.0.0:", 1)
     return connection_url
+
+
+def autodetect_usb_serial_url(baud: int) -> str:
+    devices = find_usb_serial_devices()
+    if not devices:
+        raise ValueError(
+            "no USB serial device found; connect Pixhawk USB and check /dev/ttyACM* or /dev/ttyUSB*"
+        )
+    if len(devices) > 1:
+        tty_acm_devices = [device for device in devices if Path(device).name.startswith("ttyACM")]
+        if tty_acm_devices:
+            LOGGER.warning(
+                "Multiple USB serial devices found (%s); using %s",
+                ", ".join(devices),
+                tty_acm_devices[0],
+            )
+            devices = tty_acm_devices
+        else:
+            joined_devices = ", ".join(devices)
+            raise ValueError(
+                f"multiple USB serial devices found ({joined_devices}); set connection_url explicitly"
+            )
+    connection_url = f"serial://{devices[0]}:{baud}"
+    LOGGER.info("Auto-detected USB serial connection: %s", connection_url)
+    return connection_url
+
+
+def find_usb_serial_devices() -> list[str]:
+    devices: list[str] = []
+    dev_dir = Path("/dev")
+    for pattern in USB_SERIAL_PATTERNS:
+        devices.extend(str(path) for path in dev_dir.glob(pattern) if path.exists())
+    return sorted(devices)
 
 
 def validate_config(config: MissionConfig) -> None:

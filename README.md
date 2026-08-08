@@ -31,17 +31,20 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Connect the Pi UART to a Pixhawk TELEM port and set the Pixhawk serial port for
-MAVLink at `115200` baud. The mission `connection_url` is set for Pi UART by
-default:
+Connect the Pixhawk to the Raspberry Pi with a USB cable. The mission
+`connection_url` auto-detects the single connected Pixhawk USB serial device at
+`115200` baud by default:
 
 ```text
-serial:///dev/serial0:115200
+serial://auto:115200
 ```
 
 Common URLs:
 
 ```text
+serial://auto:115200
+serial:///dev/ttyACM0:115200
+serial:///dev/ttyUSB0:115200
 serial:///dev/serial0:115200
 serial:///dev/ttyAMA0:57600
 serial:///dev/ttyUSB0:57600

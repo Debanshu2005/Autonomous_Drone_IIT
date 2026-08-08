@@ -1,5 +1,5 @@
 {
-  "connection_url": "serial:///dev/serial0:115200",
+  "connection_url": "serial://auto:115200",
   "takeoff_altitude_m": 5.0,
   "initial_takeoff_altitude_m": 1.2,
   "slow_takeoff_step_m": 0.5,
