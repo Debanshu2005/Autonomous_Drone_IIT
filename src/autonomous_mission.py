@@ -611,7 +611,9 @@ def load_config(path: Path) -> MissionConfig:
         raise ValueError("low_battery_action must be 'return' or 'land'")
 
     config = MissionConfig(
-        connection_url=str(raw.get("connection_url", "serial:///dev/ttyAMA0:57600")),
+        connection_url=normalize_connection_url(
+            str(raw.get("connection_url", "serial:///dev/serial0:115200"))
+        ),
         takeoff_altitude_m=float(raw.get("takeoff_altitude_m", 5.0)),
         initial_takeoff_altitude_m=float(raw.get("initial_takeoff_altitude_m", 1.2)),
         slow_takeoff_step_m=float(raw.get("slow_takeoff_step_m", 0.5)),
@@ -636,6 +638,14 @@ def load_config(path: Path) -> MissionConfig:
     )
     validate_config(config)
     return config
+
+
+def normalize_connection_url(connection_url: str) -> str:
+    if connection_url.startswith("udp://:"):
+        return connection_url.replace("udp://:", "udpin://0.0.0.0:", 1)
+    if connection_url.startswith("udpin://:"):
+        return connection_url.replace("udpin://:", "udpin://0.0.0.0:", 1)
+    return connection_url
 
 
 def validate_config(config: MissionConfig) -> None:

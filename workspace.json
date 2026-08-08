@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-07T06:19:54.267Z",
-  "generatedAtEpochMs": 1786083594267,
+  "generatedAt": "2026-08-08T05:10:01.032Z",
+  "generatedAtEpochMs": 1786165801032,
   "generator": {
     "name": "Code Janitor",
     "feature": "workspace-memory"
@@ -133,10 +133,15 @@
   "git": {
     "available": true,
     "branch": "master",
-    "headSummary": "2026-08-06 87c9c09 First commit",
-    "statusSummary": "",
-    "changedFileCount": 0,
-    "statusLines": [],
+    "headSummary": "2026-08-07 13ea60d feat: add example mission configuration and update workspace documentation and connectivity instructions",
+    "statusSummary": "3 modifieds, 1 untracked",
+    "changedFileCount": 4,
+    "statusLines": [
+      "M README.md",
+      "M missions/example_mission.json",
+      "M src/autonomous_mission.py",
+      "?? src/__pycache__/"
+    ],
     "error": ""
   },
   "github": {

@@ -1,6 +1,6 @@
 # Workspace Memory
 This file is maintained automatically by Code Janitor so Claude, Codex, Bob, and any other AI agent can reuse repo context without rescanning everything from scratch.
-Generated: 2026-08-07T06:19:54.267Z
+Generated: 2026-08-08T05:10:01.032Z
 Workspace: Autonomous_Drone_IIT
 Workspace root: d:\CityGrid\my-project\Autonomous_Drone_IIT
 Refresh reason: startup
@@ -33,7 +33,7 @@ Structured manifest: workspace.json
 - Logged change events: 0
 - Change mix: none yet
 - Remembered file snapshots: 0
-- Working tree summary: clean
+- Working tree summary: 3 modifieds, 1 untracked
 ## Tracked Snapshots
 - No remembered file snapshots yet.
 
@@ -45,9 +45,12 @@ Structured manifest: workspace.json
 
 ## Git Snapshot
 - Branch: master
-- HEAD: 2026-08-06 87c9c09 First commit
-- Working tree summary: clean
-- Working tree: clean
+- HEAD: 2026-08-07 13ea60d feat: add example mission configuration and update workspace documentation and connectivity instructions
+- Working tree summary: 3 modifieds, 1 untracked
+- M README.md
+- M missions/example_mission.json
+- M src/autonomous_mission.py
+- ?? src/__pycache__/
 
 ## GitHub Snapshot
 GitHub context unavailable: GitHub API request failed with 404. Not Found Configure the GitHub token in SecretStorage or GITHUB_TOKEN if the repository is private or rate-limited.
