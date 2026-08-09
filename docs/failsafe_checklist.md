@@ -10,6 +10,7 @@ Set these in your ground-control software for the exact firmware on the Pixhawk 
 
 - RC loss failsafe: enabled, with action set to LAND or RTL for your test area.
 - Battery failsafe: enabled for low and critical thresholds.
+- Battery monitor: enabled and calibrated so MAVLink reports voltage and remaining percentage.
 - GPS/EKF failsafe: enabled, with LAND as the safest default for GPS-only flight.
 - Geofence: enabled with maximum radius and altitude matching or tighter than the JSON mission.
 - Datalink/GCS failsafe: enabled if the Pi or ground station link is part of your operation.
@@ -30,6 +31,7 @@ The script commands `LAND` when it detects:
 
 - no usable global position/GPS for more than `gps_loss_grace_s`
 - stale position or GPS telemetry for more than `telemetry_timeout_s`
+- stale battery telemetry for more than `battery_telemetry_timeout_s`
 - software geofence breach
 - temporary hotspot containment radius breach
 - temporary hotspot peer heartbeat loss
@@ -37,6 +39,7 @@ The script commands `LAND` when it detects:
 - waypoint timeout
 - mission runtime timeout
 - critical battery
+- missing remaining-percent battery telemetry after arming
 - uncaught software exception
 - Ctrl+C or service stop
 

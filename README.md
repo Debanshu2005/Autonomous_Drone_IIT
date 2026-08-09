@@ -11,6 +11,7 @@ The Pi sends high-level MAVLink commands through MAVSDK. The Pixhawk remains res
 - Monitors software failsafes during flight:
   - GPS/global-position degradation
   - telemetry timeout
+  - battery telemetry timeout
   - software geofence radius
   - temporary hotspot containment radius
   - optional peer heartbeat loss over Wi-Fi
@@ -18,6 +19,7 @@ The Pi sends high-level MAVLink commands through MAVSDK. The Pixhawk remains res
   - waypoint timeout
   - mission runtime timeout
   - low and critical battery percentage
+- Refuses to arm by default until fresh Pixhawk battery telemetry is available.
 - Commands a soft landing with `LAND` on mission errors.
 - Can return to launch on normal completion or low battery.
 
@@ -26,9 +28,19 @@ No obstacle avoidance is possible with only GPS. Test only in an open legal flig
 ## Install On Raspberry Pi
 
 ```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Or run the helper after installing the system packages:
+
+```bash
+bash scripts/setup_pi.sh
+source .venv/bin/activate
 ```
 
 Connect the Pixhawk to the Raspberry Pi with a USB cable. The mission
@@ -72,11 +84,40 @@ To view live Pixhawk telemetry without arming or flying:
 python3 src/autonomous_mission.py --config missions/example_mission.json --telemetry-only
 ```
 
+The telemetry-only output includes battery voltage, optional current if your
+firmware exposes it, remaining percentage, and the age of the latest battery
+sample. It also prints `battery_state`; values such as `missing`,
+`invalid_voltage`, or `missing_percent` mean the Pixhawk is not publishing usable
+battery data yet.
+
+The monitor also listens to raw MAVLink `SYS_STATUS`, `BATTERY_STATUS`,
+`GLOBAL_POSITION_INT`, and `VFR_HUD` through MAVSDK direct messages. This is
+important because Mission Planner may display battery voltage or altitude from
+those raw messages even when MAVSDK's higher-level telemetry plugin still shows
+`n/a`.
+
+To see the exact raw battery and altitude messages reaching the Pi over USB:
+
+```bash
+python3 src/autonomous_mission.py --config missions/example_mission.json --raw-mavlink-probe
+```
+
+## Battery Telemetry Settings
+
+`missions/example_mission.json` enables required battery telemetry before arm:
+
+- `require_battery_before_arm`: wait for valid battery voltage and remaining percentage.
+- `battery_telemetry_timeout_s`: fail safe if in-flight battery samples go stale.
+- `min_prearm_battery_percent`: minimum charge required before arming.
+- `min_prearm_battery_voltage_v`: optional voltage floor; keep `0.0` to disable this check.
+- `low_battery_percent` and `critical_battery_percent`: in-flight companion failsafe thresholds.
+
 ## Important Setup
 
 Before flying, configure Pixhawk-side failsafes in QGroundControl or Mission Planner. The script is a second layer, not a replacement for flight-controller failsafes.
 
 - Calibrate accelerometer, compass, RC, ESC/motors, and battery monitor.
+- Configure the Pixhawk battery monitor so MAVLink reports voltage and remaining percentage.
 - Verify NEO 3 GPS lock and home position outdoors.
 - Configure RadioLink receiver failsafe so throttle and mode channel produce the desired flight-controller failsafe action.
 - Put a safe assisted mode on one AT95 Pro switch, such as Loiter/Position, and a land/RTL mode on another switch.

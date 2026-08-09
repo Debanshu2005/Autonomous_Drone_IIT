@@ -35,6 +35,7 @@ EARTH_RADIUS_M = 6378137.0
 DEFAULT_USB_SERIAL_BAUD = 115200
 USB_SERIAL_PATTERNS = ("ttyACM*", "ttyUSB*")
 REQUESTED_MAVLINK_STREAM_RATE_HZ = 2
+REQUESTED_BATTERY_MESSAGE_RATE_HZ = 2
 
 
 class MissionAbort(RuntimeError):
@@ -88,6 +89,10 @@ class MissionConfig:
     gps_min_satellites: int
     gps_loss_grace_s: float
     telemetry_timeout_s: float
+    battery_telemetry_timeout_s: float
+    require_battery_before_arm: bool
+    min_prearm_battery_percent: float
+    min_prearm_battery_voltage_v: float
     low_battery_percent: float
     critical_battery_percent: float
     low_battery_action: str
@@ -103,6 +108,8 @@ class TelemetryCache:
         self.gps_info: Any = None
         self.health: Any = None
         self.battery: Any = None
+        self.raw_battery: dict[str, Any] = {}
+        self.raw_altitude: dict[str, Any] = {}
         self.flight_mode: Any = None
         self.in_air: Optional[bool] = None
         self.armed: Optional[bool] = None
@@ -110,6 +117,8 @@ class TelemetryCache:
         self.last_gps_s = 0.0
         self.last_health_s = 0.0
         self.last_battery_s = 0.0
+        self.last_raw_battery_s = 0.0
+        self.last_raw_altitude_s = 0.0
         self._tasks: list[asyncio.Task[None]] = []
         self._stopping = False
 
@@ -123,6 +132,10 @@ class TelemetryCache:
             asyncio.create_task(self._watch("flight_mode", self.drone.telemetry.flight_mode())),
             asyncio.create_task(self._watch("in_air", self.drone.telemetry.in_air())),
             asyncio.create_task(self._watch("armed", self.drone.telemetry.armed())),
+            asyncio.create_task(self._watch_raw_mavlink("SYS_STATUS")),
+            asyncio.create_task(self._watch_raw_mavlink("BATTERY_STATUS")),
+            asyncio.create_task(self._watch_raw_mavlink("GLOBAL_POSITION_INT")),
+            asyncio.create_task(self._watch_raw_mavlink("VFR_HUD")),
         ]
 
     async def stop(self) -> None:
@@ -151,6 +164,88 @@ class TelemetryCache:
                 LOGGER.debug("Telemetry stream stopped during shutdown: %s", name)
                 return
             LOGGER.exception("Telemetry stream failed: %s", name)
+
+    async def _watch_raw_mavlink(self, message_name: str) -> None:
+        try:
+            async for message in self.drone.mavlink_direct.message(message_name):
+                self._apply_raw_mavlink_message(message_name, message.fields_json)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if self._stopping:
+                LOGGER.debug("Raw MAVLink stream stopped during shutdown: %s", message_name)
+                return
+            LOGGER.exception("Raw MAVLink stream failed: %s", message_name)
+
+    def _apply_raw_mavlink_message(self, message_name: str, fields_json: str) -> None:
+        try:
+            fields = json.loads(fields_json)
+        except json.JSONDecodeError:
+            LOGGER.debug("Could not parse raw MAVLink %s: %s", message_name, fields_json)
+            return
+
+        now = time.monotonic()
+        if message_name == "SYS_STATUS":
+            voltage_mv = get_finite_float(
+                first_existing_field(fields, "voltage_battery", "voltageBattery")
+            )
+            current_ca = get_finite_float(
+                first_existing_field(fields, "current_battery", "currentBattery")
+            )
+            remaining_percent = get_finite_float(
+                first_existing_field(fields, "battery_remaining", "batteryRemaining")
+            )
+            raw_battery: dict[str, Any] = {"source": "SYS_STATUS"}
+            if voltage_mv is not None and voltage_mv > 0:
+                raw_battery["voltage_v"] = voltage_mv / 1000.0
+            if current_ca is not None and current_ca >= 0:
+                raw_battery["current_battery_a"] = current_ca / 100.0
+            if remaining_percent is not None and remaining_percent >= 0:
+                raw_battery["remaining_percent"] = remaining_percent / 100.0
+            self.raw_battery.update(raw_battery)
+            self.last_raw_battery_s = now
+            return
+
+        if message_name == "BATTERY_STATUS":
+            raw_battery = {"source": "BATTERY_STATUS"}
+            voltage_v = battery_status_voltage_v(
+                first_existing_field(fields, "voltages", "voltagesExt")
+            )
+            current_ca = get_finite_float(
+                first_existing_field(fields, "current_battery", "currentBattery")
+            )
+            remaining_percent = get_finite_float(
+                first_existing_field(fields, "battery_remaining", "batteryRemaining")
+            )
+            if voltage_v is not None:
+                raw_battery["voltage_v"] = voltage_v
+            if current_ca is not None and current_ca >= 0:
+                raw_battery["current_battery_a"] = current_ca / 100.0
+            if remaining_percent is not None and remaining_percent >= 0:
+                raw_battery["remaining_percent"] = remaining_percent / 100.0
+            self.raw_battery.update(raw_battery)
+            self.last_raw_battery_s = now
+            return
+
+        if message_name == "GLOBAL_POSITION_INT":
+            relative_alt_mm = get_finite_float(
+                first_existing_field(fields, "relative_alt", "relativeAlt")
+            )
+            absolute_alt_mm = get_finite_float(fields.get("alt"))
+            if relative_alt_mm is not None:
+                self.raw_altitude["relative_altitude_m"] = relative_alt_mm / 1000.0
+            if absolute_alt_mm is not None:
+                self.raw_altitude["absolute_altitude_m"] = absolute_alt_mm / 1000.0
+            self.raw_altitude["source"] = "GLOBAL_POSITION_INT"
+            self.last_raw_altitude_s = now
+            return
+
+        if message_name == "VFR_HUD":
+            alt_m = get_finite_float(fields.get("alt"))
+            if alt_m is not None:
+                self.raw_altitude["vfr_altitude_m"] = alt_m
+            self.raw_altitude["source"] = "VFR_HUD"
+            self.last_raw_altitude_s = now
 
 
 class PeerHeartbeatProtocol(asyncio.DatagramProtocol):
@@ -317,18 +412,22 @@ class AutonomousMission:
                 return
 
     async def _wait_for_prearm_health(self) -> None:
-        LOGGER.info("Waiting for global position, home position, and GPS lock")
+        LOGGER.info("Waiting for global position, home position, GPS lock, and battery telemetry")
         deadline = time.monotonic() + self.config.prearm_health_timeout_s
         while time.monotonic() < deadline:
             health = self.telemetry.health
             gps_info = self.telemetry.gps_info
+            battery_ready = (
+                not self.config.require_battery_before_arm
+                or self._battery_is_usable_for_arm()
+            )
             if health and gps_info and self._gps_is_usable(gps_info, health):
-                if getattr(health, "is_home_position_ok", False):
+                if getattr(health, "is_home_position_ok", False) and battery_ready:
                     LOGGER.info("Prearm health OK")
                     await self._wait_for_required_peers()
                     return
             await asyncio.sleep(0.5)
-        raise MissionAbort("prearm health timeout: GPS/home position not ready")
+        raise MissionAbort("prearm health timeout: GPS/home position/battery telemetry not ready")
 
     async def _wait_for_required_peers(self) -> None:
         hotspot = self.config.hotspot_containment
@@ -482,6 +581,12 @@ class AutonomousMission:
                     raise MissionAbort("position telemetry timeout")
                 if now - self.telemetry.last_gps_s > self.config.telemetry_timeout_s:
                     raise MissionAbort("GPS telemetry timeout")
+                battery_age_s = latest_battery_age_s(self.telemetry)
+                if (
+                    battery_age_s is None
+                    or battery_age_s > self.config.battery_telemetry_timeout_s
+                ):
+                    raise MissionAbort("battery telemetry timeout")
 
             if self.telemetry.gps_info and self.telemetry.health:
                 if self._gps_is_usable(self.telemetry.gps_info, self.telemetry.health):
@@ -521,8 +626,16 @@ class AutonomousMission:
                 if missing:
                     raise MissionAbort(f"hotspot peer heartbeat lost: {missing}")
 
-            if self.telemetry.battery:
-                remaining = self.telemetry.battery.remaining_percent
+            if latest_battery_age_s(self.telemetry) is not None:
+                battery_state = describe_battery_telemetry(self.telemetry)
+                if battery_state != "ok":
+                    raise MissionAbort(f"battery telemetry invalid: {battery_state}")
+
+                remaining = telemetry_battery_remaining_percent(self.telemetry)
+                if remaining is None and self.config.require_battery_before_arm:
+                    raise MissionAbort("battery remaining-percent telemetry unavailable")
+                if remaining is None:
+                    raise MissionAbort("battery remaining-percent telemetry unavailable")
                 if remaining <= self.config.critical_battery_percent:
                     raise MissionAbort(f"critical battery: {remaining:.0%}")
                 if (
@@ -594,6 +707,28 @@ class AutonomousMission:
             and global_position_ok
         )
 
+    def _battery_is_usable_for_arm(self) -> bool:
+        battery_age_s = latest_battery_age_s(self.telemetry)
+        if battery_age_s is None:
+            return False
+        if battery_age_s > self.config.battery_telemetry_timeout_s:
+            return False
+
+        voltage = telemetry_battery_voltage_v(self.telemetry)
+        remaining = telemetry_battery_remaining_percent(self.telemetry)
+        if voltage is None or voltage <= 0:
+            return False
+        if remaining is None:
+            return False
+        if remaining < self.config.min_prearm_battery_percent:
+            return False
+        if (
+            self.config.min_prearm_battery_voltage_v > 0
+            and voltage < self.config.min_prearm_battery_voltage_v
+        ):
+            return False
+        return True
+
 
 def load_config(path: Path) -> MissionConfig:
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -652,6 +787,14 @@ def load_config(path: Path) -> MissionConfig:
         gps_min_satellites=int(raw.get("gps_min_satellites", 8)),
         gps_loss_grace_s=float(raw.get("gps_loss_grace_s", 5.0)),
         telemetry_timeout_s=float(raw.get("telemetry_timeout_s", 3.0)),
+        battery_telemetry_timeout_s=float(
+            raw.get("battery_telemetry_timeout_s", raw.get("telemetry_timeout_s", 3.0))
+        ),
+        require_battery_before_arm=bool(raw.get("require_battery_before_arm", True)),
+        min_prearm_battery_percent=float(
+            raw.get("min_prearm_battery_percent", raw.get("low_battery_percent", 0.3))
+        ),
+        min_prearm_battery_voltage_v=float(raw.get("min_prearm_battery_voltage_v", 0.0)),
         low_battery_percent=float(raw.get("low_battery_percent", 0.3)),
         critical_battery_percent=float(raw.get("critical_battery_percent", 0.2)),
         low_battery_action=low_battery_action,
@@ -729,6 +872,24 @@ def validate_config(config: MissionConfig) -> None:
         raise ValueError("max_altitude_agl_m cannot be lower than takeoff_altitude_m")
     if config.hotspot_containment.drone_id in config.hotspot_containment.expected_peer_ids:
         raise ValueError("hotspot_containment.drone_id cannot be in expected_peer_ids")
+    if config.telemetry_timeout_s <= 0:
+        raise ValueError("telemetry_timeout_s must be greater than 0")
+    if config.battery_telemetry_timeout_s <= 0:
+        raise ValueError("battery_telemetry_timeout_s must be greater than 0")
+    for field_name in (
+        "low_battery_percent",
+        "critical_battery_percent",
+        "min_prearm_battery_percent",
+    ):
+        value = getattr(config, field_name)
+        if not 0 <= value <= 1:
+            raise ValueError(f"{field_name} must be between 0.0 and 1.0")
+    if config.critical_battery_percent > config.low_battery_percent:
+        raise ValueError("critical_battery_percent cannot exceed low_battery_percent")
+    if config.min_prearm_battery_percent < config.low_battery_percent:
+        raise ValueError("min_prearm_battery_percent should be at least low_battery_percent")
+    if config.min_prearm_battery_voltage_v < 0:
+        raise ValueError("min_prearm_battery_voltage_v cannot be negative")
 
 
 def offset_lat_lon(
@@ -792,6 +953,64 @@ async def run_telemetry_monitor(config: MissionConfig) -> int:
     return 0
 
 
+async def run_raw_mavlink_probe(config: MissionConfig, duration_s: float) -> int:
+    request_mavlink_data_streams(config.connection_url)
+
+    drone = System()
+    await drone.connect(system_address=config.connection_url)
+    LOGGER.info("Connecting to vehicle at %s", config.connection_url)
+    async for state in drone.core.connection_state():
+        if state.is_connected:
+            LOGGER.info("Vehicle discovered")
+            break
+
+    message_names = [
+        "SYS_STATUS",
+        "BATTERY_STATUS",
+        "GLOBAL_POSITION_INT",
+        "VFR_HUD",
+    ]
+    deadline_s = time.monotonic() + duration_s
+    seen: set[str] = set()
+    tasks = [
+        asyncio.create_task(_probe_raw_mavlink_message(drone, message_name, seen, deadline_s))
+        for message_name in message_names
+    ]
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=duration_s + 2.0,
+        )
+    except asyncio.TimeoutError:
+        pass
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    missing = [message_name for message_name in message_names if message_name not in seen]
+    if missing:
+        LOGGER.warning("No raw MAVLink messages seen during probe: %s", ", ".join(missing))
+    return 0
+
+
+async def _probe_raw_mavlink_message(
+    drone: System,
+    message_name: str,
+    seen: set[str],
+    deadline_s: float,
+) -> None:
+    async for message in drone.mavlink_direct.message(message_name):
+        if time.monotonic() > deadline_s:
+            return
+        if message_name in seen:
+            continue
+        seen.add(message_name)
+        LOGGER.info("Raw %s fields: %s", message_name, message.fields_json)
+        if len(seen) >= 4:
+            return
+
+
 def format_telemetry_snapshot(telemetry: TelemetryCache) -> str:
     position = telemetry.position
     gps_info = telemetry.gps_info
@@ -800,12 +1019,36 @@ def format_telemetry_snapshot(telemetry: TelemetryCache) -> str:
 
     lat = format_number(getattr(position, "latitude_deg", None), precision=7)
     lon = format_number(getattr(position, "longitude_deg", None), precision=7)
-    rel_alt = format_number(getattr(position, "relative_altitude_m", None), precision=1)
-    abs_alt = format_number(getattr(position, "absolute_altitude_m", None), precision=1)
+    rel_alt = format_number(
+        first_existing_value(
+            getattr(position, "relative_altitude_m", None),
+            telemetry.raw_altitude.get("relative_altitude_m"),
+        ),
+        precision=1,
+    )
+    abs_alt = format_number(
+        first_existing_value(
+            getattr(position, "absolute_altitude_m", None),
+            telemetry.raw_altitude.get("absolute_altitude_m"),
+            telemetry.raw_altitude.get("vfr_altitude_m"),
+        ),
+        precision=1,
+    )
+    raw_altitude_source = format_value(telemetry.raw_altitude.get("source"))
     sats = format_value(getattr(gps_info, "num_satellites", None))
     fix = format_value(getattr(gps_info, "fix_type", None))
-    battery_voltage = format_number(getattr(battery, "voltage_v", None), precision=2)
-    battery_percent = format_percent(getattr(battery, "remaining_percent", None))
+    battery_voltage = format_number(telemetry_battery_voltage_v(telemetry), precision=2)
+    battery_state = describe_battery_telemetry(telemetry)
+    battery_percent_value = telemetry_battery_remaining_percent(telemetry)
+    battery_percent = (
+        format_percent(battery_percent_value)
+        if battery_state == "ok"
+        else "unknown"
+    )
+    battery_current = format_number(telemetry_battery_current_a(telemetry), precision=2)
+    battery_age_value = latest_battery_age_s(telemetry)
+    battery_age = "n/a" if battery_age_value is None else format_number(battery_age_value, 1)
+    battery_source = battery_telemetry_source(telemetry)
     global_ok = format_bool(getattr(health, "is_global_position_ok", None))
     home_ok = format_bool(getattr(health, "is_home_position_ok", None))
 
@@ -813,10 +1056,14 @@ def format_telemetry_snapshot(telemetry: TelemetryCache) -> str:
         f"armed={format_value(telemetry.armed)} "
         f"in_air={format_value(telemetry.in_air)} "
         f"mode={format_value(telemetry.flight_mode)} "
-        f"battery_v={battery_voltage} battery={battery_percent} "
+        f"battery_state={battery_state} "
+        f"battery_source={battery_source} "
+        f"battery_v={battery_voltage} battery_current_a={battery_current} "
+        f"battery={battery_percent} battery_age_s={battery_age} "
         f"gps_fix={fix} sats={sats} "
         f"global_ok={global_ok} home_ok={home_ok} "
-        f"lat={lat} lon={lon} rel_alt_m={rel_alt} abs_alt_m={abs_alt}"
+        f"lat={lat} lon={lon} rel_alt_m={rel_alt} abs_alt_m={abs_alt} "
+        f"raw_alt_source={raw_altitude_source}"
     )
 
 
@@ -832,22 +1079,164 @@ def format_bool(value: Any) -> str:
     return "yes" if bool(value) else "no"
 
 
+def describe_battery_telemetry(telemetry: TelemetryCache) -> str:
+    battery_age_s = latest_battery_age_s(telemetry)
+    if battery_age_s is None:
+        return "missing"
+
+    if battery_age_s > 5.0:
+        return "stale"
+
+    voltage = telemetry_battery_voltage_v(telemetry)
+    remaining = telemetry_battery_remaining_percent(telemetry)
+    if voltage is None or voltage <= 0:
+        return "invalid_voltage"
+    if remaining is None:
+        return "missing_percent"
+    if not 0 <= remaining <= 1:
+        return "invalid_percent"
+    return "ok"
+
+
+def latest_battery_age_s(telemetry: TelemetryCache) -> Optional[float]:
+    latest_s = max(telemetry.last_battery_s, telemetry.last_raw_battery_s)
+    if latest_s <= 0:
+        return None
+    return time.monotonic() - latest_s
+
+
+def battery_telemetry_source(telemetry: TelemetryCache) -> str:
+    if telemetry.last_battery_s <= 0 and telemetry.last_raw_battery_s <= 0:
+        return "n/a"
+    if telemetry.last_battery_s >= telemetry.last_raw_battery_s:
+        return "mavsdk"
+    return str(telemetry.raw_battery.get("source", "raw_mavlink"))
+
+
+def telemetry_battery_voltage_v(telemetry: TelemetryCache) -> Optional[float]:
+    return first_positive_number(
+        getattr(telemetry.battery, "voltage_v", None),
+        telemetry.raw_battery.get("voltage_v"),
+    )
+
+
+def telemetry_battery_current_a(telemetry: TelemetryCache) -> Optional[float]:
+    return first_existing_number(
+        first_existing_attr(
+            telemetry.battery,
+            "current_battery_a",
+            "current_a",
+        ),
+        telemetry.raw_battery.get("current_battery_a"),
+    )
+
+
+def telemetry_battery_remaining_percent(telemetry: TelemetryCache) -> Optional[float]:
+    return first_battery_fraction(
+        getattr(telemetry.battery, "remaining_percent", None),
+        telemetry.raw_battery.get("remaining_percent"),
+    )
+
+
+def battery_status_voltage_v(voltages: Any) -> Optional[float]:
+    if not isinstance(voltages, list):
+        return None
+
+    valid_cell_mv = []
+    for voltage in voltages:
+        voltage_mv = get_finite_float(voltage)
+        if voltage_mv is None:
+            continue
+        if voltage_mv <= 0 or voltage_mv >= 65535:
+            continue
+        valid_cell_mv.append(voltage_mv)
+
+    if not valid_cell_mv:
+        return None
+    return sum(valid_cell_mv) / 1000.0
+
+
 def format_number(value: Any, precision: int) -> str:
+    value = get_finite_float(value)
     if value is None:
         return "n/a"
-    try:
-        return f"{float(value):.{precision}f}"
-    except (TypeError, ValueError):
-        return str(value)
+    return f"{value:.{precision}f}"
 
 
 def format_percent(value: Any) -> str:
+    value = get_finite_float(value)
     if value is None:
         return "n/a"
+    return f"{value:.0%}"
+
+
+def get_finite_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
     try:
-        return f"{float(value):.0%}"
+        number = float(value)
     except (TypeError, ValueError):
-        return str(value)
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def first_existing_attr(source: Any, *names: str) -> Any:
+    if source is None:
+        return None
+    for name in names:
+        value = getattr(source, name, None)
+        if value is not None:
+            return value
+    return None
+
+
+def first_existing_value(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def first_existing_field(fields: dict[str, Any], *names: str) -> Any:
+    for name in names:
+        if name in fields:
+            return fields[name]
+    lower_fields = {key.lower(): value for key, value in fields.items()}
+    for name in names:
+        value = lower_fields.get(name.lower())
+        if value is not None:
+            return value
+    return None
+
+
+def first_existing_number(*values: Any) -> Optional[float]:
+    for value in values:
+        number = get_finite_float(value)
+        if number is not None:
+            return number
+    return None
+
+
+def first_positive_number(*values: Any) -> Optional[float]:
+    for value in values:
+        number = get_finite_float(value)
+        if number is not None and number > 0:
+            return number
+    return None
+
+
+def first_battery_fraction(*values: Any) -> Optional[float]:
+    for value in values:
+        number = get_finite_float(value)
+        if number is None or number < 0:
+            continue
+        if number <= 1:
+            return number
+        if number <= 100:
+            return number / 100.0
+    return None
 
 
 def request_mavlink_data_streams(connection_url: str) -> None:
@@ -872,6 +1261,8 @@ def request_mavlink_data_streams(connection_url: str) -> None:
             return
 
         requested_streams = [
+            ("POSITION", mavutil.mavlink.MAV_DATA_STREAM_POSITION),
+            ("EXTRA1", mavutil.mavlink.MAV_DATA_STREAM_EXTRA1),
             ("EXTRA2", mavutil.mavlink.MAV_DATA_STREAM_EXTRA2),
             ("EXTENDED_STATUS", mavutil.mavlink.MAV_DATA_STREAM_EXTENDED_STATUS),
         ]
@@ -883,8 +1274,35 @@ def request_mavlink_data_streams(connection_url: str) -> None:
                 REQUESTED_MAVLINK_STREAM_RATE_HZ,
                 1,
             )
+        requested_messages = [
+            ("BATTERY_STATUS", getattr(mavutil.mavlink, "MAVLINK_MSG_ID_BATTERY_STATUS", None)),
+            ("SYS_STATUS", getattr(mavutil.mavlink, "MAVLINK_MSG_ID_SYS_STATUS", None)),
+            (
+                "GLOBAL_POSITION_INT",
+                getattr(mavutil.mavlink, "MAVLINK_MSG_ID_GLOBAL_POSITION_INT", None),
+            ),
+            ("VFR_HUD", getattr(mavutil.mavlink, "MAVLINK_MSG_ID_VFR_HUD", None)),
+        ]
+        interval_us = int(1_000_000 / REQUESTED_BATTERY_MESSAGE_RATE_HZ)
+        for message_name, message_id in requested_messages:
+            if message_id is None:
+                LOGGER.debug("MAVLink message id unavailable: %s", message_name)
+                continue
+            master.mav.command_long_send(
+                master.target_system,
+                master.target_component,
+                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+                0,
+                message_id,
+                interval_us,
+                0,
+                0,
+                0,
+                0,
+                0,
+            )
         LOGGER.info(
-            "Requested MAVLink EXTRA2 and EXTENDED_STATUS data streams at %d Hz on %s",
+            "Requested MAVLink telemetry streams and battery messages at %d Hz on %s",
             REQUESTED_MAVLINK_STREAM_RATE_HZ,
             device,
         )
@@ -939,6 +1357,17 @@ async def amain() -> int:
         action="store_true",
         help="Connect and print live Pixhawk telemetry without arming or flying",
     )
+    parser.add_argument(
+        "--raw-mavlink-probe",
+        action="store_true",
+        help="Print one raw battery/altitude MAVLink message from the Pixhawk and exit",
+    )
+    parser.add_argument(
+        "--raw-mavlink-probe-seconds",
+        default=10.0,
+        type=float,
+        help="How long to wait for raw MAVLink probe messages",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -946,6 +1375,8 @@ async def amain() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     config = load_config(args.config)
+    if args.raw_mavlink_probe:
+        return await run_raw_mavlink_probe(config, args.raw_mavlink_probe_seconds)
     if args.telemetry_only:
         return await run_telemetry_monitor(config)
 
