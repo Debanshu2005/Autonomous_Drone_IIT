@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-08T05:10:01.032Z",
-  "generatedAtEpochMs": 1786165801032,
+  "generatedAt": "2026-08-26T12:49:48.010Z",
+  "generatedAtEpochMs": 1787748588010,
   "generator": {
     "name": "Code Janitor",
     "feature": "workspace-memory"
@@ -26,11 +26,15 @@
       "README.md"
     ],
     "stats": {
-      "totalFiles": 7,
+      "totalFiles": 10,
       "topLevelAreas": [
         {
           "name": "[root]",
-          "count": 4
+          "count": 5
+        },
+        {
+          "name": "scripts",
+          "count": 2
         },
         {
           "name": "docs",
@@ -55,11 +59,23 @@
           "count": 2
         },
         {
+          "name": ".ps1",
+          "count": 1
+        },
+        {
           "name": ".py",
           "count": 1
         },
         {
+          "name": ".sh",
+          "count": 1
+        },
+        {
           "name": ".txt",
+          "count": 1
+        },
+        {
+          "name": "[no extension]",
           "count": 1
         }
       ],
@@ -67,6 +83,12 @@
         "README.md"
       ],
       "fileInventory": [
+        {
+          "path": ".janitor-audit-log",
+          "topLevelArea": "[root]",
+          "extension": "[no extension]",
+          "isKeyFile": false
+        },
         {
           "path": "docs/failsafe_checklist.md",
           "topLevelArea": "docs",
@@ -89,6 +111,18 @@
           "path": "requirements.txt",
           "topLevelArea": "[root]",
           "extension": ".txt",
+          "isKeyFile": false
+        },
+        {
+          "path": "scripts/deploy_to_pi.ps1",
+          "topLevelArea": "scripts",
+          "extension": ".ps1",
+          "isKeyFile": false
+        },
+        {
+          "path": "scripts/setup_pi.sh",
+          "topLevelArea": "scripts",
+          "extension": ".sh",
           "isKeyFile": false
         },
         {
@@ -133,14 +167,13 @@
   "git": {
     "available": true,
     "branch": "master",
-    "headSummary": "2026-08-07 13ea60d feat: add example mission configuration and update workspace documentation and connectivity instructions",
-    "statusSummary": "3 modifieds, 1 untracked",
-    "changedFileCount": 4,
+    "headSummary": "2026-08-09 58e00c2 updates",
+    "statusSummary": "3 modifieds",
+    "changedFileCount": 3,
     "statusLines": [
-      "M README.md",
-      "M missions/example_mission.json",
-      "M src/autonomous_mission.py",
-      "?? src/__pycache__/"
+      "M graphify-out/WORKSPACE_MEMORY.md",
+      "M workspace.json",
+      "M workspacememory.md"
     ],
     "error": ""
   },

@@ -102,6 +102,49 @@ To see the exact raw battery and altitude messages reaching the Pi over USB:
 python3 src/autonomous_mission.py --config missions/example_mission.json --raw-mavlink-probe
 ```
 
+## Adaptive Terminal Mission Controller
+
+The modular pymavlink controller lives in:
+
+- `src/mavlink_io.py`: non-blocking MAVLink reader/cache and command helpers.
+- `src/sensor_check.py`: GPS, EKF, local-position, optical-flow/vision, and battery discovery.
+- `src/trajectory_engine.py`: natural-language command parsing and NED/global waypoint generation.
+- `src/flight_controller.py`: `IDLE -> HARDWARE_CHECK -> ARMING -> TAKEOFF -> TRAJECTORY_FOLLOW -> RTL_OR_HOLD` FSM.
+- `src/main.py`: interactive terminal REPL.
+
+Run it on the Raspberry Pi with:
+
+```bash
+python3 src/main.py --connect serial://auto:115200 --default-altitude 3
+```
+
+Common REPL commands:
+
+```text
+status
+take off to 3 meters, hover for two seconds, and land
+circle r=5 h=3 n=36
+fly in a 5m radius circle at 3m altitude
+square search pattern 10m h=3
+go 10 meters north and 5 meters east at 3 meters altitude
+goto x=10 y=5 h=3
+hold
+land
+rtl
+quit
+```
+
+If a command cannot be parsed, the REPL prints an in-terminal command guide with
+natural-language examples and the compact parameter dictionary.
+
+Before each navigation task, the controller probes Pixhawk telemetry and selects:
+
+- `GPS-Enabled`: fresh `GPS_RAW_INT`, healthy EKF absolute horizontal position, and `LOCAL_POSITION_NED`; trajectories are converted to global WGS84 targets.
+- `GPS-Denied / Optical Flow`: fresh optical-flow/vision/odometry aiding plus healthy local EKF; trajectories stay in local NED/body frames.
+- `Degraded`: insufficient position estimate; navigation commands are refused and the terminal prints the reason.
+
+Use `--help` for tunable acceptance radius, waypoint timeout, satellite threshold, battery thresholds, altitude ceiling, and final action.
+
 ## Battery Telemetry Settings
 
 `missions/example_mission.json` enables required battery telemetry before arm:
