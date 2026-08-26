@@ -20,13 +20,15 @@ from sensor_check import NavigationMode, SensorReport
 
 EARTH_RADIUS_M = 6378137.0
 DISTANCE_UNIT_PATTERN = r"(?:m|meter|meters|metre|metres)?"
-TIME_UNIT_PATTERN = r"(?:s|sec|secs|second|seconds)"
+DISTANCE_UNIT_WORD_PATTERN = r"(?:meters|meter|metres|metre|m)"
+TIME_UNIT_PATTERN = r"(?:seconds|second|secs|sec|s)"
 
 
 class TaskAction(str, Enum):
     CIRCLE = "circle"
     GOTO = "goto"
     SQUARE = "square"
+    HOVER = "hover"
     HOLD = "hold"
     LAND = "land"
     RTL = "rtl"
@@ -44,6 +46,18 @@ class ParsedTask:
     action: TaskAction
     params: dict[str, float]
     raw_text: str
+    notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TaskSequence:
+    tasks: list[ParsedTask]
+    raw_text: str
+    notes: tuple[str, ...] = ()
+
+    @property
+    def action_names(self) -> list[str]:
+        return [task.action.name for task in self.tasks]
 
 
 @dataclass(frozen=True)
@@ -98,10 +112,16 @@ def parse_task(text: str, default_altitude_m: float = 3.0) -> ParsedTask:
     normalized = _normalize_text(text)
     if not normalized:
         raise ValueError("empty command")
+    normalized = _strip_command_prefix(normalized)
 
     params = _parse_key_values(normalized)
     numbers = _numbers(normalized)
 
+    if "hover" in normalized and "takeoff" not in normalized:
+        hover_s = _duration_seconds(normalized)
+        if hover_s is None:
+            hover_s = _first_or(5.0, numbers)
+        return ParsedTask(TaskAction.HOVER, {"hover_s": hover_s}, text)
     if normalized in {"hold", "hold position", "loiter", "pause"}:
         return ParsedTask(TaskAction.HOLD, params, text)
     if normalized in {"land", "land now", "abort land"}:
@@ -162,15 +182,99 @@ def parse_task(text: str, default_altitude_m: float = 3.0) -> ParsedTask:
     )
 
 
+def parse_task_sequence(
+    text: str,
+    default_altitude_m: float = 3.0,
+    default_hover_s: float = 2.0,
+) -> TaskSequence:
+    normalized = _strip_command_prefix(_normalize_text(text))
+    if not normalized:
+        raise ValueError("empty command")
+
+    if _is_directional_goto_text(normalized):
+        task = parse_task(normalized, default_altitude_m)
+        return TaskSequence([task], text, task.notes)
+
+    if not _looks_compound(normalized):
+        task = parse_task(normalized, default_altitude_m)
+        if task.action == TaskAction.TAKEOFF_LAND:
+            return TaskSequence(
+                [
+                    ParsedTask(TaskAction.TAKEOFF, {"h": task.params["h"]}, text, task.notes),
+                    ParsedTask(TaskAction.HOVER, {"hover_s": task.params.get("hover_s", default_hover_s)}, text),
+                    ParsedTask(TaskAction.LAND, {}, text),
+                ],
+                text,
+                task.notes,
+            )
+        return TaskSequence([task], text, task.notes)
+
+    tasks: list[ParsedTask] = []
+    notes: list[str] = []
+    last_altitude_m = default_altitude_m
+    clauses = _split_clauses(normalized)
+    for index, clause in enumerate(clauses):
+        try:
+            task = parse_task(clause, last_altitude_m)
+        except ValueError:
+            if "launch" in clause or "home" in clause:
+                task = ParsedTask(TaskAction.RTL, {}, clause)
+            else:
+                raise ValueError(f"could not parse clause {index + 1}: {clause!r}")
+
+        if task.action == TaskAction.TAKEOFF_LAND:
+            tasks.append(ParsedTask(TaskAction.TAKEOFF, {"h": task.params["h"]}, clause, task.notes))
+            tasks.append(ParsedTask(TaskAction.HOVER, {"hover_s": task.params.get("hover_s", default_hover_s)}, clause))
+            tasks.append(ParsedTask(TaskAction.LAND, {}, clause))
+            last_altitude_m = task.params["h"]
+            continue
+
+        if task.action == TaskAction.TAKEOFF:
+            explicit_altitude = _has_explicit_altitude(clause)
+            if not explicit_altitude:
+                next_hover_altitude = _next_hover_altitude_hint(clauses[index + 1 :])
+                if next_hover_altitude is not None:
+                    task = ParsedTask(
+                        TaskAction.TAKEOFF,
+                        {**task.params, "h": next_hover_altitude},
+                        clause,
+                        ("Interpreted hover distance as takeoff altitude.",),
+                    )
+                    notes.append("Interpreted hover distance as takeoff altitude.")
+            last_altitude_m = task.params.get("h", last_altitude_m)
+
+        if task.action in {TaskAction.CIRCLE, TaskAction.GOTO, TaskAction.SQUARE}:
+            task = ParsedTask(task.action, {**task.params, "h": task.params.get("h", last_altitude_m)}, clause, task.notes)
+
+        if task.action == TaskAction.HOVER:
+            hover_s = _duration_seconds(clause)
+            if hover_s is None:
+                hover_s = default_hover_s
+                if _hover_altitude_hint(clause) is not None:
+                    notes.append("Hover distance was treated as altitude; hover time defaulted to 2s.")
+            task = ParsedTask(TaskAction.HOVER, {"hover_s": hover_s}, clause, task.notes)
+
+        tasks.append(task)
+
+    if not tasks:
+        raise ValueError("no executable tasks found")
+    return TaskSequence(tasks, text, tuple(dict.fromkeys(notes)))
+
+
 def build_trajectory(
     task: ParsedTask,
     report: SensorReport,
     origin: VehicleOrigin,
 ) -> TrajectoryPlan:
-    if task.action in {TaskAction.HOLD, TaskAction.LAND, TaskAction.RTL}:
+    if task.action in {TaskAction.HOVER, TaskAction.HOLD, TaskAction.LAND, TaskAction.RTL}:
         frame = _frame_for_mode(report.mode)
         altitude_m = max(0.0, float(origin.relative_alt_m or 0.0))
-        return TrajectoryPlan(task.action, frame, [], [], altitude_m, task.action.value)
+        if task.action == TaskAction.HOVER:
+            altitude_m = max(altitude_m, float(task.params.get("h", altitude_m)))
+            description = f"hover duration={task.params.get('hover_s', 0.0):.1f}s"
+        else:
+            description = task.action.value
+        return TrajectoryPlan(task.action, frame, [], [], altitude_m, description)
 
     if report.mode == NavigationMode.MODE_C_DEGRADED and task.action not in {
         TaskAction.HOLD,
@@ -349,6 +453,74 @@ def _parse_key_values(text: str) -> dict[str, float]:
     for match in re.finditer(r"\b([a-z_]+)\s*=\s*([-+]?\d+(?:\.\d+)?)", text):
         params[match.group(1)] = float(match.group(2))
     return params
+
+
+def _strip_command_prefix(text: str) -> str:
+    return re.sub(r"^\s*\[cmd\]\s*", "", text, flags=re.IGNORECASE).strip()
+
+
+def _looks_compound(text: str) -> bool:
+    action_hits = sum(
+        1
+        for pattern in (
+            r"\btakeoff\b",
+            r"\bhover\b",
+            r"\bcircle\b",
+            r"\borbit\b",
+            r"\bsquare\b",
+            r"\bsearch\b",
+            r"\bgoto\b",
+            r"\bgo\b",
+            r"\bfly\b",
+            r"\bland\b",
+            r"\breturn\b",
+            r"\brtl\b",
+        )
+        if re.search(pattern, text)
+    )
+    return action_hits > 1 or "," in text or " then " in text or " and " in text
+
+
+def _is_directional_goto_text(text: str) -> bool:
+    has_move_word = re.search(r"\b(?:goto|go|fly|move)\b", text) is not None
+    has_direction = re.search(r"\b(?:north|east|south|west)\b", text) is not None
+    has_sequence_word = re.search(r"\b(?:takeoff|hover|circle|orbit|square|search|land|return|rtl)\b", text) is not None
+    return has_move_word and has_direction and not has_sequence_word
+
+
+def _split_clauses(text: str) -> list[str]:
+    cleaned = re.sub(r"\b(?:and then|then|and)\b", ",", text)
+    return [clause.strip(" .") for clause in cleaned.split(",") if clause.strip(" .")]
+
+
+def _has_explicit_altitude(text: str) -> bool:
+    return (
+        _named_distance(text, ("altitude", "height", "alt", "h")) is not None
+        or re.search(
+            rf"\b(?:takeoff|climb)\s*(?:to)?\s*[-+]?\d+(?:\.\d+)?\s*{DISTANCE_UNIT_PATTERN}\b",
+            text,
+        )
+        is not None
+    )
+
+
+def _next_hover_altitude_hint(clauses: list[str]) -> Optional[float]:
+    for clause in clauses:
+        if "hover" in clause:
+            return _hover_altitude_hint(clause)
+        if any(word in clause for word in ("land", "rtl", "return", "circle", "goto", "go ", "fly ")):
+            return None
+    return None
+
+
+def _hover_altitude_hint(text: str) -> Optional[float]:
+    match = re.search(
+        rf"\bhover\s*(?:for|at)?\s*([-+]?\d+(?:\.\d+)?)\s*{DISTANCE_UNIT_WORD_PATTERN}\b",
+        text,
+    )
+    if match:
+        return float(match.group(1))
+    return None
 
 
 def command_guide() -> str:

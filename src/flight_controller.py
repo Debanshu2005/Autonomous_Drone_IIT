@@ -14,7 +14,7 @@ import math
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Callable, Optional
 
 from pymavlink import mavutil
 
@@ -71,10 +71,12 @@ class FlightController:
         mavlink: MavlinkConnection,
         sensors: SensorDiscovery,
         config: FlightControllerConfig = FlightControllerConfig(),
+        status_sink: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.mavlink = mavlink
         self.sensors = sensors
         self.config = config
+        self.status_sink = status_sink
         self.state = FlightState.IDLE
         self._watchdog_task: Optional[asyncio.Task[None]] = None
         self._failsafe_reason: Optional[str] = None
@@ -138,6 +140,88 @@ class FlightController:
                 await asyncio.gather(self._watchdog_task, return_exceptions=True)
             self.state = FlightState.IDLE
 
+    async def execute_task_queue(
+        self,
+        tasks: list[ParsedTask],
+        build_plan: Callable[[ParsedTask, SensorReport], TrajectoryPlan],
+    ) -> None:
+        if not tasks:
+            return
+
+        if len(tasks) == 1 and tasks[0].action in {TaskAction.HOLD, TaskAction.LAND, TaskAction.RTL}:
+            await self._execute_immediate_command(tasks[0])
+            return
+
+        self._failsafe_reason = None
+        self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+        try:
+            report = await self._hardware_check()
+            self._emit("STATUS", f"Sensor check passed: Active navigation frame is {_nav_label(report)}.")
+            await self._enter_guided_mode(report.mode)
+
+            for index, task in enumerate(tasks, start=1):
+                await self._raise_if_failsafe()
+                plan = build_plan(task, report)
+                self._emit(
+                    "STATUS",
+                    f"Task {index}/{len(tasks)}: {task.action.name} queued for execution.",
+                )
+                await self._execute_queue_task(task, plan)
+
+            self._emit("STATUS", "Sequence complete.")
+        except asyncio.CancelledError:
+            self._emit("STATUS", "Sequence interrupted.")
+            raise
+        except Exception:
+            if self._vehicle_armed():
+                await self.land("autonomous sequence aborted")
+            raise
+        finally:
+            if self._watchdog_task:
+                self._watchdog_task.cancel()
+                await asyncio.gather(self._watchdog_task, return_exceptions=True)
+            self.state = FlightState.IDLE
+
+    async def _execute_immediate_command(self, task: ParsedTask) -> None:
+        if task.action == TaskAction.HOLD:
+            await self.hold()
+        elif task.action == TaskAction.LAND:
+            await self.land("operator interrupt")
+            await self._wait_until_landed_or_disarmed()
+        elif task.action == TaskAction.RTL:
+            await self.rtl("operator interrupt")
+
+    async def _execute_queue_task(self, task: ParsedTask, plan: TrajectoryPlan) -> None:
+        if task.action == TaskAction.TAKEOFF:
+            await self._arm_and_takeoff(plan.target_altitude_m)
+            return
+        if task.action == TaskAction.HOVER:
+            await self._hold_for(task.params.get("hover_s", 0.0))
+            return
+        if task.action == TaskAction.HOLD:
+            await self.hold()
+            return
+        if task.action == TaskAction.LAND:
+            await self.land("operator sequence")
+            await self._wait_until_landed_or_disarmed()
+            return
+        if task.action == TaskAction.RTL:
+            await self.rtl("operator sequence")
+            return
+
+        if not self._vehicle_armed():
+            await self._arm_and_takeoff(plan.target_altitude_m)
+        elif (self._current_relative_altitude() or 0.0) < max(0.5, plan.target_altitude_m - 0.75):
+            await self._wait_until_altitude(plan.target_altitude_m)
+
+        self.state = FlightState.TRAJECTORY_FOLLOW
+        if plan.frame == TargetFrame.GLOBAL_RELATIVE_ALT:
+            for target in plan.global_targets:
+                await self._fly_global_target(target)
+        else:
+            for target in plan.local_targets:
+                await self._fly_local_target(target)
+
     async def hold(self) -> None:
         self.state = FlightState.RTL_OR_HOLD
         local = self._current_local_position()
@@ -149,11 +233,13 @@ class FlightController:
 
     async def land(self, reason: str) -> None:
         self.state = FlightState.RTL_OR_HOLD
+        self._emit("STATUS", f"LAND requested: {reason}")
         LOGGER.warning("LAND requested: %s", reason)
         await self.mavlink.land()
 
     async def rtl(self, reason: str) -> None:
         self.state = FlightState.RTL_OR_HOLD
+        self._emit("STATUS", f"RTL requested: {reason}")
         LOGGER.warning("RTL requested: %s", reason)
         await self.mavlink.rtl()
 
@@ -175,6 +261,7 @@ class FlightController:
         last_error: Optional[Exception] = None
         for mode_name in mode_candidates:
             try:
+                self._emit("STATUS", f"Changing autopilot mode to {mode_name}.")
                 LOGGER.info("Changing autopilot mode to %s", mode_name)
                 if mode_name == "OFFBOARD":
                     await self._prestream_offboard_setpoints()
@@ -196,10 +283,12 @@ class FlightController:
     async def _arm_and_takeoff(self, target_altitude_m: float) -> None:
         self.state = FlightState.ARMING
         if not self._vehicle_armed():
+            self._emit("STATUS", "Arming vehicle.")
             LOGGER.info("Arming vehicle")
             await self.mavlink.arm()
 
         self.state = FlightState.TAKEOFF
+        self._emit("STATUS", f"Taking off to {target_altitude_m:.1f}m.")
         LOGGER.info("Taking off to %.1fm AGL", target_altitude_m)
         try:
             await self.mavlink.takeoff(target_altitude_m)
@@ -215,7 +304,14 @@ class FlightController:
             local = self._current_local_position()
             if local is not None:
                 _, _, down_m = local
-                if abs((-down_m) - target_altitude_m) <= self.config.waypoint_acceptance_radius_m:
+                current_alt_m = -down_m
+                error_m = target_altitude_m - current_alt_m
+                self._emit(
+                    "EXEC",
+                    f"Executing TAKEOFF to {target_altitude_m:.1f}m | "
+                    f"Current Alt: {current_alt_m:.1f}m | Error: {error_m:.1f}m",
+                )
+                if abs(error_m) <= self.config.waypoint_acceptance_radius_m:
                     return
                 self.mavlink.send_local_position_target(local[0], local[1], -target_altitude_m)
             await asyncio.sleep(1.0 / self.config.setpoint_rate_hz)
@@ -230,6 +326,8 @@ class FlightController:
         hold_position = self._current_local_position()
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
+            remaining_s = max(0.0, deadline - time.monotonic())
+            self._emit("EXEC", f"Executing HOVER | Time remaining: {remaining_s:.1f}s")
             if hold_position is not None:
                 self.mavlink.send_local_position_target(*hold_position)
             else:
@@ -256,6 +354,11 @@ class FlightController:
             local = self._current_local_position()
             if local is not None:
                 distance = local_distance_m(target, *local)
+                self._emit(
+                    "EXEC",
+                    f"Executing {target.name} | Current POS: "
+                    f"({local[0]:.1f},{local[1]:.1f},{local[2]:.1f}) | Error: {distance:.1f}m",
+                )
                 if distance <= self.config.waypoint_acceptance_radius_m:
                     if target.hold_s > 0:
                         await asyncio.sleep(target.hold_s)
@@ -285,6 +388,11 @@ class FlightController:
                 lat, lon, relative_alt = global_position
                 horizontal_error = global_distance_m(lat, lon, target.lat_deg, target.lon_deg)
                 vertical_error = abs(relative_alt - target.relative_alt_m)
+                self._emit(
+                    "EXEC",
+                    f"Executing {target.name} | Current Alt: {relative_alt:.1f}m | "
+                    f"Horizontal Error: {horizontal_error:.1f}m | Vertical Error: {vertical_error:.1f}m",
+                )
                 if max(horizontal_error, vertical_error) <= self.config.waypoint_acceptance_radius_m:
                     if target.hold_s > 0:
                         await asyncio.sleep(target.hold_s)
@@ -336,6 +444,28 @@ class FlightController:
                 return f"altitude limit exceeded ({altitude_m:.1f}m)"
 
         return None
+
+    def _emit(self, prefix: str, message: str) -> None:
+        if self.status_sink:
+            self.status_sink(f"[{prefix}] {message}")
+
+    async def _wait_until_landed_or_disarmed(self, timeout_s: float = 60.0) -> None:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            local = self._current_local_position()
+            altitude_m = -local[2] if local is not None else None
+            armed = self._vehicle_armed()
+            if altitude_m is not None:
+                self._emit(
+                    "EXEC",
+                    f"Executing LAND | Current Alt: {altitude_m:.1f}m | Armed: {armed}",
+                )
+            if not armed or (altitude_m is not None and altitude_m <= 0.2):
+                self._emit("STATUS", "Sequence complete. Drone landed or disarmed.")
+                return
+            await asyncio.sleep(0.5)
+        self._emit("STATUS", "LAND command sent; landed/disarmed confirmation timed out.")
+
 
     def _vehicle_armed(self) -> bool:
         heartbeat = self.mavlink.latest_message("HEARTBEAT")
@@ -391,3 +521,11 @@ def _yaw_rad(yaw_deg: Optional[float]) -> Optional[float]:
     if yaw_deg is None or not math.isfinite(yaw_deg):
         return None
     return math.radians(yaw_deg)
+
+
+def _nav_label(report: SensorReport) -> str:
+    if report.mode == NavigationMode.MODE_A_GPS:
+        return "GLOBAL_GPS"
+    if report.mode == NavigationMode.MODE_B_LOCAL:
+        return "LOCAL_OPTICAL_FLOW"
+    return "NONE"

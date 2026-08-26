@@ -16,6 +16,7 @@ $files = @(
     "src/sensor_check.py",
     "src/trajectory_engine.py",
     "src/flight_controller.py",
+    "src/terminal_ui.py",
     "legacy/autonomous_mission.py",
     "missions/example_mission.json",
     "docs/failsafe_checklist.md",

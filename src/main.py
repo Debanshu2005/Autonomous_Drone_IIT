@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import concurrent.futures
 import logging
+import queue
 import signal
+import threading
 from dataclasses import dataclass
 from typing import Optional
 
@@ -31,14 +34,14 @@ from sensor_check import (
     format_sensor_report,
 )
 from trajectory_engine import (
-    ParsedTask,
     TaskAction,
-    TrajectoryPlan,
+    TaskSequence,
     VehicleOrigin,
     build_trajectory,
     command_guide,
-    parse_task,
+    parse_task_sequence,
 )
+from terminal_ui import TelemetryThread, TerminalPrinter
 
 
 LOGGER = logging.getLogger("mission_controller")
@@ -57,7 +60,7 @@ class CliConfig:
     critical_battery_percent: float
     critical_battery_voltage_v: float
     final_action: str
-    status_interval_s: float
+    telemetry_rate_hz: float
 
 
 class MissionRepl:
@@ -67,26 +70,44 @@ class MissionRepl:
         sensors: SensorDiscovery,
         controller: FlightController,
         config: CliConfig,
+        printer: TerminalPrinter,
     ) -> None:
         self.mavlink = mavlink
         self.sensors = sensors
         self.controller = controller
         self.config = config
-        self._active_task: Optional[asyncio.Task[None]] = None
+        self.printer = printer
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._queue: queue.Queue[Optional[TaskSequence]] = queue.Queue()
+        self._active_future: Optional[concurrent.futures.Future[None]] = None
+        self._worker_stop = threading.Event()
+        self._worker_thread = threading.Thread(target=self._worker_loop, name="mission-worker", daemon=True)
+        self._telemetry_thread = TelemetryThread(
+            sensors,
+            printer,
+            controller_state=lambda: self.controller.state.value,
+            rate_hz=config.telemetry_rate_hz,
+        )
         self._status_task: Optional[asyncio.Task[None]] = None
         self._stop = asyncio.Event()
 
     async def run(self) -> None:
-        self._status_task = asyncio.create_task(self._status_loop())
-        print("Autonomous terminal mission controller ready. Type 'help' for commands.")
+        self._loop = asyncio.get_running_loop()
+        self._worker_thread.start()
+        self._telemetry_thread.start()
+        self.printer.write_line("[STATUS] Autonomous terminal mission controller ready. Type 'help' for commands.")
         try:
             while not self._stop.is_set():
-                line = await asyncio.to_thread(input, "mission> ")
+                line = await asyncio.to_thread(self.printer.input)
                 await self._handle_line(line)
         finally:
-            if self._active_task and not self._active_task.done():
-                self._active_task.cancel()
-                await asyncio.gather(self._active_task, return_exceptions=True)
+            self._telemetry_thread.stop()
+            self._worker_stop.set()
+            self._flush_queue()
+            if self._active_future and not self._active_future.done():
+                self._active_future.cancel()
+            self._queue.put(None)
+            self._worker_thread.join(timeout=3.0)
             if self._status_task:
                 self._status_task.cancel()
                 await asyncio.gather(self._status_task, return_exceptions=True)
@@ -104,73 +125,108 @@ class MissionRepl:
         if command.lower() in {"help", "?"}:
             self._print_help()
             return
-        if command.lower() == "status":
+        if command.lower().removeprefix("[cmd]").strip() == "status":
             report = await self.sensors.probe(wait_s=1.0)
-            print(format_sensor_report(report))
+            self.printer.write_line(f"[STATUS] {format_sensor_report(report)}")
             for reason in report.reasons:
-                print(f"  - {reason}")
+                self.printer.write_line(f"[STATUS] {reason}")
             return
 
         try:
-            task = parse_task(command, default_altitude_m=self.config.default_altitude_m)
+            sequence = parse_task_sequence(command, default_altitude_m=self.config.default_altitude_m)
         except ValueError as exc:
-            print(f"Command parse error: {exc}")
-            print(command_guide())
+            self.printer.write_line(f"[STATUS] Command parse error: {exc}")
+            self.printer.write_line(command_guide())
             return
 
-        if self._active_task and not self._active_task.done():
-            if task.action in {TaskAction.LAND, TaskAction.RTL, TaskAction.HOLD}:
-                print("Stopping current autonomous task.")
-                self._active_task.cancel()
-                await asyncio.gather(self._active_task, return_exceptions=True)
-            else:
-                print("A trajectory is already running. Use 'hold', 'land', or 'rtl' first.")
+        names = ", ".join(sequence.action_names)
+        self.printer.write_line(
+            f"[STATUS] Parsing command: Queued {len(sequence.tasks)} tasks ({names})."
+        )
+        for note in sequence.notes:
+            self.printer.write_line(f"[STATUS] Parser note: {note}")
+
+        if self._is_interrupt(sequence):
+            self.printer.write_line("[STATUS] High-priority interrupt received. Flushing task queue.")
+            self._flush_queue()
+            if self._active_future and not self._active_future.done():
+                self._active_future.cancel()
+
+        self._queue.put(sequence)
+
+    def _worker_loop(self) -> None:
+        while not self._worker_stop.is_set():
+            sequence = self._queue.get()
+            if sequence is None:
                 return
+            if self._loop is None:
+                self.printer.write_line("[STATUS] Worker loop is not ready.")
+                continue
+            future = asyncio.run_coroutine_threadsafe(self._execute_sequence(sequence), self._loop)
+            self._active_future = future
+            try:
+                future.result()
+            except concurrent.futures.CancelledError:
+                self.printer.write_line("[STATUS] Active sequence cancelled.")
+            except Exception as exc:
+                self.printer.write_line(f"[STATUS] Sequence failed: {exc}")
+            finally:
+                if self._active_future is future:
+                    self._active_future = None
 
-        report = await self.sensors.probe(wait_s=2.0)
-        if task.action not in {TaskAction.LAND, TaskAction.RTL, TaskAction.HOLD} and not report.can_navigate:
-            print("Navigation aborted: position estimate is degraded.")
-            for reason in report.reasons:
-                print(f"  - {reason}")
-            return
-
+    async def _execute_sequence(self, sequence: TaskSequence) -> None:
         try:
-            plan = build_trajectory(task, report, self._origin_from_report(report))
-        except ValueError as exc:
-            print(f"Trajectory error: {exc}")
-            return
-
-        if task.action in {TaskAction.LAND, TaskAction.RTL, TaskAction.HOLD}:
-            await self._execute(task, plan)
-            return
-
-        self._print_plan_summary(report, plan)
-        if not await _confirm("Execute this autonomous task? [y/N] "):
-            print("Task cancelled.")
-            return
-
-        self._active_task = asyncio.create_task(self._execute(task, plan))
-
-    async def _execute(self, task: ParsedTask, plan: TrajectoryPlan) -> None:
-        try:
-            await self.controller.execute_plan(task, plan)
-            print(f"Task complete: {plan.description}")
-        except asyncio.CancelledError:
-            print("Task cancelled.")
+            await self.controller.execute_task_queue(
+                sequence.tasks,
+                lambda task, report: build_trajectory(task, report, self._origin_from_report(report)),
+            )
         except (FlightAbort, MavlinkError) as exc:
-            print(f"Task aborted: {exc}")
+            self.printer.write_line(f"[STATUS] Task aborted: {exc}")
+        except asyncio.CancelledError:
+            self.printer.write_line("[STATUS] Sequence cancellation acknowledged.")
+            raise
         except Exception as exc:
             LOGGER.exception("Unexpected task failure")
-            print(f"Unexpected task failure: {exc}")
+            self.printer.write_line(f"[STATUS] Unexpected task failure: {exc}")
 
-    async def _status_loop(self) -> None:
+    def _flush_queue(self) -> None:
         while True:
             try:
-                report = self.sensors.snapshot()
-                print(f"\n[health] {format_sensor_report(report)} state={self.controller.state.value}")
-            except Exception as exc:
-                LOGGER.debug("Could not print health status: %s", exc)
-            await asyncio.sleep(self.config.status_interval_s)
+                self._queue.get_nowait()
+            except queue.Empty:
+                return
+
+    def _is_interrupt(self, sequence: TaskSequence) -> bool:
+        return (
+            len(sequence.tasks) == 1
+            and sequence.tasks[0].action in {TaskAction.HOLD, TaskAction.LAND, TaskAction.RTL}
+        )
+
+    def _print_plan_summary(self, report: SensorReport, sequence: TaskSequence) -> None:
+        for task in sequence.tasks:
+            if task.action in {TaskAction.HOVER, TaskAction.HOLD, TaskAction.LAND, TaskAction.RTL}:
+                continue
+            plan = build_trajectory(task, report, self._origin_from_report(report))
+            self.printer.write_line(f"[STATUS] Sensor mode: {report.mode.value}")
+            self.printer.write_line(f"[STATUS] Plan: {plan.description}")
+            self.printer.write_line(f"[STATUS] Frame: {plan.frame.value}")
+            self.printer.write_line(f"[STATUS] Targets: {plan.count}")
+            if plan.local_targets:
+                first = plan.local_targets[0]
+                last = plan.local_targets[-1]
+                self.printer.write_line(
+                    "[STATUS] Local NED preview: "
+                    f"first=({first.north_m:.1f},{first.east_m:.1f},{first.down_m:.1f}) "
+                    f"last=({last.north_m:.1f},{last.east_m:.1f},{last.down_m:.1f})"
+                )
+            if plan.global_targets:
+                first_global = plan.global_targets[0]
+                self.printer.write_line(
+                    "[STATUS] Global preview: "
+                    f"lat={first_global.lat_deg:.7f} lon={first_global.lon_deg:.7f} "
+                    f"alt={first_global.relative_alt_m:.1f}m"
+                )
+            return
 
     def _origin_from_report(self, report: SensorReport) -> VehicleOrigin:
         lat_deg: Optional[float] = None
@@ -200,35 +256,8 @@ class MissionRepl:
             relative_alt_m=relative_alt_m,
         )
 
-    def _print_plan_summary(self, report: SensorReport, plan: TrajectoryPlan) -> None:
-        print(f"Sensor mode: {report.mode.value}")
-        print(f"Plan: {plan.description}")
-        print(f"Frame: {plan.frame.value}")
-        print(f"Targets: {plan.count}")
-        print(f"Acceptance radius: {self.config.acceptance_radius_m:.2f}m")
-        if plan.local_targets:
-            first = plan.local_targets[0]
-            last = plan.local_targets[-1]
-            print(
-                "Local NED preview: "
-                f"first=({first.north_m:.1f},{first.east_m:.1f},{first.down_m:.1f}) "
-                f"last=({last.north_m:.1f},{last.east_m:.1f},{last.down_m:.1f})"
-            )
-        if plan.global_targets:
-            first_global = plan.global_targets[0]
-            print(
-                "Global preview: "
-                f"lat={first_global.lat_deg:.7f} lon={first_global.lon_deg:.7f} "
-                f"alt={first_global.relative_alt_m:.1f}m"
-            )
-
     def _print_help(self) -> None:
-        print(command_guide())
-
-
-async def _confirm(prompt: str) -> bool:
-    answer = await asyncio.to_thread(input, prompt)
-    return answer.strip().lower() in {"y", "yes"}
+        self.printer.write_line(command_guide())
 
 
 async def amain() -> int:
@@ -244,7 +273,7 @@ async def amain() -> int:
     parser.add_argument("--critical-battery-percent", type=float, default=0.12, help="LAND below this battery fraction")
     parser.add_argument("--critical-battery-voltage", type=float, default=0.0, help="LAND below this voltage if set")
     parser.add_argument("--final-action", choices=["hold", "land", "rtl"], default="hold")
-    parser.add_argument("--status-interval", type=float, default=5.0, help="Health print interval in seconds")
+    parser.add_argument("--telemetry-rate", type=float, default=2.0, help="Background telemetry print rate, 0.5Hz to 5Hz")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
 
@@ -265,9 +294,10 @@ async def amain() -> int:
         critical_battery_percent=args.critical_battery_percent,
         critical_battery_voltage_v=args.critical_battery_voltage,
         final_action=args.final_action,
-        status_interval_s=args.status_interval,
+        telemetry_rate_hz=args.telemetry_rate,
     )
 
+    printer = TerminalPrinter(prompt="[CMD] ")
     mavlink = MavlinkConnection(config.connection_url)
     await mavlink.connect()
     await mavlink.start()
@@ -293,8 +323,9 @@ async def amain() -> int:
             max_altitude_m=config.max_altitude_m,
             final_action=config.final_action,
         ),
+        status_sink=printer.write_line,
     )
-    repl = MissionRepl(mavlink, sensors, controller, config)
+    repl = MissionRepl(mavlink, sensors, controller, config, printer)
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
