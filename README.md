@@ -83,6 +83,8 @@ status
 [CMD] Take off, hover for 2 meters, and land
 [CMD] Takeoff to 5m, circle with 3m radius, then return to launch
 [CMD] Hover for 10s
+switch mode to guided
+swich mode to althold
 take off to 3 meters, hover for two seconds, and land
 circle r=5 h=3 n=36
 fly in a 5m radius circle at 3m altitude

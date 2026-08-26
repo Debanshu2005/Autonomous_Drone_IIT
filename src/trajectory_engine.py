@@ -29,6 +29,7 @@ class TaskAction(str, Enum):
     GOTO = "goto"
     SQUARE = "square"
     HOVER = "hover"
+    SET_MODE = "set_mode"
     HOLD = "hold"
     LAND = "land"
     RTL = "rtl"
@@ -116,6 +117,10 @@ def parse_task(text: str, default_altitude_m: float = 3.0) -> ParsedTask:
 
     params = _parse_key_values(normalized)
     numbers = _numbers(normalized)
+
+    mode_name = _mode_request(normalized)
+    if mode_name:
+        return ParsedTask(TaskAction.SET_MODE, {}, text, (f"mode={mode_name}",))
 
     if "hover" in normalized and "takeoff" not in normalized:
         hover_s = _duration_seconds(normalized)
@@ -266,12 +271,15 @@ def build_trajectory(
     report: SensorReport,
     origin: VehicleOrigin,
 ) -> TrajectoryPlan:
-    if task.action in {TaskAction.HOVER, TaskAction.HOLD, TaskAction.LAND, TaskAction.RTL}:
+    if task.action in {TaskAction.HOVER, TaskAction.SET_MODE, TaskAction.HOLD, TaskAction.LAND, TaskAction.RTL}:
         frame = _frame_for_mode(report.mode)
         altitude_m = max(0.0, float(origin.relative_alt_m or 0.0))
         if task.action == TaskAction.HOVER:
             altitude_m = max(altitude_m, float(task.params.get("h", altitude_m)))
             description = f"hover duration={task.params.get('hover_s', 0.0):.1f}s"
+        elif task.action == TaskAction.SET_MODE:
+            mode_name = task.notes[0].removeprefix("mode=") if task.notes else "UNKNOWN"
+            description = f"set mode {mode_name}"
         else:
             description = task.action.value
         return TrajectoryPlan(task.action, frame, [], [], altitude_m, description)
@@ -459,6 +467,42 @@ def _strip_command_prefix(text: str) -> str:
     return re.sub(r"^\s*\[cmd\]\s*", "", text, flags=re.IGNORECASE).strip()
 
 
+def _mode_request(text: str) -> Optional[str]:
+    match = re.search(
+        r"\b(?:switch|swich|change|set)\s+(?:flight\s+)?mode\s+(?:to\s+)?([a-z0-9_ -]+)\b",
+        text,
+    )
+    if match is None:
+        match = re.search(r"\bmode\s+([a-z0-9_ -]+)\b", text)
+    if match is None:
+        return None
+    raw_mode = match.group(1).strip(" .")
+    return _normalize_mode_name(raw_mode)
+
+
+def _normalize_mode_name(raw_mode: str) -> str:
+    compact = re.sub(r"[^a-z0-9]+", "", raw_mode.lower())
+    aliases = {
+        "guided": "GUIDED",
+        "guidednogps": "GUIDED_NOGPS",
+        "althold": "ALT_HOLD",
+        "altitudehold": "ALT_HOLD",
+        "loiter": "LOITER",
+        "stabilize": "STABILIZE",
+        "land": "LAND",
+        "rtl": "RTL",
+        "returntolaunch": "RTL",
+        "poshold": "POSHOLD",
+        "positionhold": "POSHOLD",
+        "offboard": "OFFBOARD",
+        "hold": "HOLD",
+        "altctl": "ALTCTL",
+        "posctl": "POSCTL",
+        "manual": "MANUAL",
+    }
+    return aliases.get(compact, raw_mode.strip().upper().replace("-", "_").replace(" ", "_"))
+
+
 def _looks_compound(text: str) -> bool:
     action_hits = sum(
         1
@@ -532,6 +576,8 @@ def command_guide() -> str:
         "    do a 10 meter square search pattern at 3 meters\n"
         "    go 10 meters north and 5 meters east at 3 meters altitude\n"
         "    hold position\n"
+        "    switch mode to guided\n"
+        "    switch mode to althold\n"
         "    land now\n"
         "    return to launch\n"
         "  Compact command forms:\n"
@@ -539,6 +585,7 @@ def command_guide() -> str:
         "    circle r=5 h=3 n=36\n"
         "    square size=10 h=3 passes=4\n"
         "    goto x=10 y=5 h=3\n"
+        "    mode guided | mode alt_hold\n"
         "    hold | land | rtl\n"
         "  Parameter dictionary:\n"
         "    h / altitude / height: target altitude above launch in meters\n"

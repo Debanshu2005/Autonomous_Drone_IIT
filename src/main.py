@@ -199,7 +199,12 @@ class MissionRepl:
     def _is_interrupt(self, sequence: TaskSequence) -> bool:
         return (
             len(sequence.tasks) == 1
-            and sequence.tasks[0].action in {TaskAction.HOLD, TaskAction.LAND, TaskAction.RTL}
+            and sequence.tasks[0].action in {
+                TaskAction.SET_MODE,
+                TaskAction.HOLD,
+                TaskAction.LAND,
+                TaskAction.RTL,
+            }
         )
 
     def _print_plan_summary(self, report: SensorReport, sequence: TaskSequence) -> None:

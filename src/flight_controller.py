@@ -148,7 +148,12 @@ class FlightController:
         if not tasks:
             return
 
-        if len(tasks) == 1 and tasks[0].action in {TaskAction.HOLD, TaskAction.LAND, TaskAction.RTL}:
+        if len(tasks) == 1 and tasks[0].action in {
+            TaskAction.SET_MODE,
+            TaskAction.HOLD,
+            TaskAction.LAND,
+            TaskAction.RTL,
+        }:
             await self._execute_immediate_command(tasks[0])
             return
 
@@ -183,13 +188,23 @@ class FlightController:
             self.state = FlightState.IDLE
 
     async def _execute_immediate_command(self, task: ParsedTask) -> None:
-        if task.action == TaskAction.HOLD:
+        if task.action == TaskAction.SET_MODE:
+            mode_name = task.notes[0].removeprefix("mode=") if task.notes else ""
+            await self.change_mode(mode_name)
+        elif task.action == TaskAction.HOLD:
             await self.hold()
         elif task.action == TaskAction.LAND:
             await self.land("operator interrupt")
             await self._wait_until_landed_or_disarmed()
         elif task.action == TaskAction.RTL:
             await self.rtl("operator interrupt")
+
+    async def change_mode(self, mode_name: str) -> None:
+        if not mode_name:
+            raise FlightAbort("mode command did not include a target mode")
+        self._emit("STATUS", f"Changing autopilot mode to {mode_name}.")
+        await self.mavlink.set_mode(mode_name)
+        self._emit("STATUS", f"Mode changed to {mode_name}.")
 
     async def _execute_queue_task(self, task: ParsedTask, plan: TrajectoryPlan) -> None:
         if task.action == TaskAction.TAKEOFF:
