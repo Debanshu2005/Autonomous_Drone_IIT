@@ -1,29 +1,33 @@
 # Autonomous Drone IIT
 
-Raspberry Pi companion-computer script for a GPS-only autonomous mission using a Pixhawk V6X, NEO 3 GPS, and RadioLink AT95 Pro transmitter.
+Raspberry Pi companion-computer mission controller for a Pixhawk V6X, adaptive
+GPS/optical-flow navigation, and terminal-driven natural-language flight tasks.
 
-The Pi sends high-level MAVLink commands through MAVSDK. The Pixhawk remains responsible for stabilization, motor output, RC override, EKF/GPS checks, battery failsafe, and landing execution.
+The Pi sends high-level MAVLink setpoints and commands through MAVLink. The
+Pixhawk remains responsible for stabilization, motor output, RC override,
+EKF/GPS checks, battery failsafe, and landing execution.
 
 ## What This Does
 
-- Waits for Pixhawk connection, GPS health, and home position.
-- Arms, performs a slow staged takeoff to 5 m, hovers, and then flies local north/east waypoints from the launch point.
+- Waits for Pixhawk connection, estimator health, and battery telemetry.
+- Detects GPS-enabled, GPS-denied optical-flow/vision, or degraded navigation modes.
+- Parses terminal commands such as natural-language takeoff/hover/land,
+  circles, goto offsets, and square search patterns.
+- Arms, takes off, streams global or local NED setpoints, and verifies waypoint
+  acceptance radius.
 - Monitors software failsafes during flight:
-  - GPS/global-position degradation
+  - GPS/local-position degradation
   - telemetry timeout
   - battery telemetry timeout
-  - software geofence radius
-  - temporary hotspot containment radius
-  - optional peer heartbeat loss over Wi-Fi
   - altitude limit
   - waypoint timeout
-  - mission runtime timeout
   - low and critical battery percentage
+  - emergency RC override channel
 - Refuses to arm by default until fresh Pixhawk battery telemetry is available.
 - Commands a soft landing with `LAND` on mission errors.
-- Can return to launch on normal completion or low battery.
 
-No obstacle avoidance is possible with only GPS. Test only in an open legal flight area with a human pilot ready to switch to manual/Loiter/Stabilize and land.
+No obstacle avoidance is included. Test only in an open legal flight area with a
+human pilot ready to switch to manual/Loiter/Stabilize and land.
 
 ## Install On Raspberry Pi
 
@@ -64,55 +68,9 @@ udpin://0.0.0.0:14550
 udpin://0.0.0.0:14540
 ```
 
-## Run
+## Run The Terminal Controller
 
-Edit `missions/example_mission.json` for your field and limits, then:
-
-```bash
-python3 src/autonomous_mission.py --config missions/example_mission.json
-```
-
-For SITL or bench testing:
-
-```bash
-python3 src/autonomous_mission.py --config missions/example_mission.json --log-level DEBUG
-```
-
-To view live Pixhawk telemetry without arming or flying:
-
-```bash
-python3 src/autonomous_mission.py --config missions/example_mission.json --telemetry-only
-```
-
-The telemetry-only output includes battery voltage, optional current if your
-firmware exposes it, remaining percentage, and the age of the latest battery
-sample. It also prints `battery_state`; values such as `missing`,
-`invalid_voltage`, or `missing_percent` mean the Pixhawk is not publishing usable
-battery data yet.
-
-The monitor also listens to raw MAVLink `SYS_STATUS`, `BATTERY_STATUS`,
-`GLOBAL_POSITION_INT`, and `VFR_HUD` through MAVSDK direct messages. This is
-important because Mission Planner may display battery voltage or altitude from
-those raw messages even when MAVSDK's higher-level telemetry plugin still shows
-`n/a`.
-
-To see the exact raw battery and altitude messages reaching the Pi over USB:
-
-```bash
-python3 src/autonomous_mission.py --config missions/example_mission.json --raw-mavlink-probe
-```
-
-## Adaptive Terminal Mission Controller
-
-The modular pymavlink controller lives in:
-
-- `src/mavlink_io.py`: non-blocking MAVLink reader/cache and command helpers.
-- `src/sensor_check.py`: GPS, EKF, local-position, optical-flow/vision, and battery discovery.
-- `src/trajectory_engine.py`: natural-language command parsing and NED/global waypoint generation.
-- `src/flight_controller.py`: `IDLE -> HARDWARE_CHECK -> ARMING -> TAKEOFF -> TRAJECTORY_FOLLOW -> RTL_OR_HOLD` FSM.
-- `src/main.py`: interactive terminal REPL.
-
-Run it on the Raspberry Pi with:
+Run the adaptive natural-language controller on the Raspberry Pi with:
 
 ```bash
 python3 src/main.py --connect serial://auto:115200 --default-altitude 3
@@ -144,6 +102,38 @@ Before each navigation task, the controller probes Pixhawk telemetry and selects
 - `Degraded`: insufficient position estimate; navigation commands are refused and the terminal prints the reason.
 
 Use `--help` for tunable acceptance radius, waypoint timeout, satellite threshold, battery thresholds, altitude ceiling, and final action.
+
+## Legacy JSON Runner
+
+The previous GPS-only MAVSDK mission runner has been moved to
+`legacy/autonomous_mission.py`. Keep it as a reference or fallback while the new
+terminal controller is tested.
+
+Run the legacy path with:
+
+```bash
+python3 legacy/autonomous_mission.py --config missions/example_mission.json
+```
+
+The telemetry-only output includes battery voltage, optional current if your
+firmware exposes it, remaining percentage, and the age of the latest battery
+sample. It also prints `battery_state`; values such as `missing`,
+`invalid_voltage`, or `missing_percent` mean the Pixhawk is not publishing usable
+battery data yet.
+
+The monitor also listens to raw MAVLink `SYS_STATUS`, `BATTERY_STATUS`,
+`GLOBAL_POSITION_INT`, and `VFR_HUD` through MAVSDK direct messages. This is
+important because Mission Planner may display battery voltage or altitude from
+those raw messages even when MAVSDK's higher-level telemetry plugin still shows
+`n/a`.
+
+To see the exact raw battery and altitude messages reaching the Pi over USB:
+
+```bash
+python3 legacy/autonomous_mission.py --config missions/example_mission.json --raw-mavlink-probe
+```
+
+The active controller modules live in `src/`.
 
 ## Battery Telemetry Settings
 

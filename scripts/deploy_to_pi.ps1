@@ -11,13 +11,18 @@ $target = "${PiUser}@${PiHost}:${RemotePath}/"
 $files = @(
     "README.md",
     "requirements.txt",
-    "src/autonomous_mission.py",
+    "src/main.py",
+    "src/mavlink_io.py",
+    "src/sensor_check.py",
+    "src/trajectory_engine.py",
+    "src/flight_controller.py",
+    "legacy/autonomous_mission.py",
     "missions/example_mission.json",
     "docs/failsafe_checklist.md",
     "scripts/setup_pi.sh"
 )
 
-ssh "${PiUser}@${PiHost}" "mkdir -p '$RemotePath/src' '$RemotePath/missions' '$RemotePath/docs' '$RemotePath/scripts'"
+ssh "${PiUser}@${PiHost}" "mkdir -p '$RemotePath/src' '$RemotePath/legacy' '$RemotePath/missions' '$RemotePath/docs' '$RemotePath/scripts'"
 
 foreach ($file in $files) {
     $local = Join-Path $root $file
