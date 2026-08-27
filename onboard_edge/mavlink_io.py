@@ -545,6 +545,14 @@ class SwarmManager:
             conn = MavlinkConnection(url, source_system=self.source_system, source_component=self.source_component)
             try:
                 await conn.connect(heartbeat_timeout_s)
+                if conn.target_system in self.connections:
+                    LOGGER.error(
+                        "SwarmManager: Duplicate SYSID %s from %s; configure each vehicle with a unique MAVLink system ID.",
+                        conn.target_system,
+                        url,
+                    )
+                    await conn.close()
+                    return
                 self.connections[conn.target_system] = conn
                 LOGGER.info(f"SwarmManager: Registered drone SYSID {conn.target_system} via {url}")
             except Exception as e:

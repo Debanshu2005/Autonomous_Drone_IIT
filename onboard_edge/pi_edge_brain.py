@@ -3,7 +3,7 @@ import logging
 import socket
 import time
 import threading
-from typing import Optional
+from typing import Optional, Sequence
 
 # AI Pipeline Hooks (Placeholders)
 try:
@@ -23,13 +23,52 @@ from trajectory_engine import (
 )
 
 LOGGER = logging.getLogger("pi_edge_brain")
+DEFAULT_CONNECTION_URL = "serial:///dev/ttyAMA0:921600"
+
+
+def expand_connection_urls(values: Optional[Sequence[str]]) -> list[str]:
+    if not values:
+        return [DEFAULT_CONNECTION_URL]
+    urls: list[str] = []
+    for value in values:
+        urls.extend(part.strip() for part in value.split(",") if part.strip())
+    return urls or [DEFAULT_CONNECTION_URL]
+
+
+def parse_targeted_command(cmd: str) -> tuple[Optional[int], str]:
+    text = cmd.strip()
+    lower = text.lower()
+    for prefix in ("sysid:", "sysid=", "drone:", "drone="):
+        if lower.startswith(prefix):
+            rest = text[len(prefix):].strip()
+            sysid_text, _, command = rest.partition(" ")
+            try:
+                return int(sysid_text), command.strip()
+            except ValueError:
+                return None, text
+    if text.startswith("@"):
+        sysid_text, _, command = text[1:].partition(" ")
+        try:
+            return int(sysid_text), command.strip()
+        except ValueError:
+            return None, text
+    return None, text
 
 class EdgeBrain:
-    def __init__(self, serial_url="serial:///dev/ttyAMA0:921600", host="0.0.0.0", port=5000):
-        self.serial_url = serial_url
+    def __init__(
+        self,
+        serial_url: str | Sequence[str] = DEFAULT_CONNECTION_URL,
+        host="0.0.0.0",
+        port=5000,
+    ):
+        if isinstance(serial_url, str):
+            self.connection_urls = expand_connection_urls([serial_url])
+        else:
+            self.connection_urls = expand_connection_urls(serial_url)
+        self.serial_url = ", ".join(self.connection_urls)
         self.host = host
         self.port = port
-        self.swarm = SwarmManager([self.serial_url])
+        self.swarm = SwarmManager(self.connection_urls)
         self.sensors_map = {}
         self.controllers = {}
         
@@ -124,11 +163,25 @@ class EdgeBrain:
                     self.client_sock = None
 
     async def process_command(self, cmd: str):
-        # Broadcast to all for now if no specific sysid targeted
+        # Broadcast unless the laptop command starts with sysid:<id> or @<id>.
         try:
-            sequence = parse_task_sequence(cmd)
-            self._send_client_line(f"[STATUS] Parsed command: queued {len(sequence.tasks)} task(s).")
-            for sysid in self.controllers:
+            target_sysid, command_text = parse_targeted_command(cmd)
+            if not command_text:
+                raise ValueError("empty command")
+            sequence = parse_task_sequence(command_text)
+            target_sysids = [target_sysid] if target_sysid is not None else list(self.controllers)
+            missing = [sysid for sysid in target_sysids if sysid not in self.controllers]
+            if missing:
+                raise ValueError(f"unknown SYSID(s): {', '.join(str(sysid) for sysid in missing)}")
+            target_label = (
+                f"SYSID:{target_sysid}"
+                if target_sysid is not None
+                else f"all {len(target_sysids)} drone(s)"
+            )
+            self._send_client_line(
+                f"[STATUS] Parsed command for {target_label}: queued {len(sequence.tasks)} task(s)."
+            )
+            for sysid in target_sysids:
                 asyncio.create_task(self._execute_sequence(sysid, sequence))
         except Exception as e:
             msg = f"Command parse error: {e}"
@@ -255,14 +308,21 @@ class EdgeBrain:
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Raspberry Pi Edge Brain for Pixhawk v6x")
-    parser.add_argument("--connect", default="serial:///dev/ttyAMA0:921600", help="MAVLink connection URL (e.g. tcp:127.0.0.1:5760 for SITL/Mission Planner)")
+    parser.add_argument(
+        "--connect",
+        action="append",
+        help=(
+            "MAVLink connection URL. Repeat for a swarm or pass comma-separated URLs "
+            "(e.g. --connect tcp:127.0.0.1:5762 --connect tcp:127.0.0.1:5772)."
+        ),
+    )
     parser.add_argument("--host", default="0.0.0.0", help="Host IP for socket listener")
     parser.add_argument("--port", type=int, default=5000, help="Port for socket listener")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     
-    brain = EdgeBrain(serial_url=args.connect, host=args.host, port=args.port)
+    brain = EdgeBrain(serial_url=expand_connection_urls(args.connect), host=args.host, port=args.port)
     try:
         await brain.start()
     except KeyboardInterrupt:

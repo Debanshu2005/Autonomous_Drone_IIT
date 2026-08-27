@@ -22,6 +22,22 @@ EARTH_RADIUS_M = 6378137.0
 DISTANCE_UNIT_PATTERN = r"(?:m|meter|meters|metre|metres)?"
 DISTANCE_UNIT_WORD_PATTERN = r"(?:meters|meter|metres|metre|m)"
 TIME_UNIT_PATTERN = r"(?:seconds|second|secs|sec|s)"
+DIRECTION_UNIT_PATTERN = r"(cm|m|km|meter|meters|metre|metres|kilometer|kilometers|centimeter|centimeters)"
+DIRECTION_AXES = {
+    "north": ("north", 1.0),
+    "forward": ("north", 1.0),
+    "forwards": ("north", 1.0),
+    "ahead": ("north", 1.0),
+    "south": ("north", -1.0),
+    "back": ("north", -1.0),
+    "backward": ("north", -1.0),
+    "backwards": ("north", -1.0),
+    "reverse": ("north", -1.0),
+    "east": ("east", 1.0),
+    "right": ("east", 1.0),
+    "west": ("east", -1.0),
+    "left": ("east", -1.0),
+}
 
 
 class TaskAction(str, Enum):
@@ -139,7 +155,7 @@ def parse_mission(text: str) -> list[dict]:
     has_land = bool(re.search(r'\bland\b', normalized))
     has_rtl = bool(re.search(r'\brtl\b|\breturn\b', normalized))
     has_hold = bool(re.search(r'\bhold\b|\bloiter\b', normalized))
-    has_goto = bool(re.search(r'\bgoto\b|\bgo\b', normalized))
+    has_goto = bool(re.search(r'\bgoto\b|\bgo\b|\bmove\b|\bfly\b', normalized))
     shape_match = re.search(r'\b(circle|square|triangle|spiral|figure-8|grid)\b', normalized)
 
     if has_takeoff:
@@ -162,6 +178,7 @@ def parse_mission(text: str) -> list[dict]:
         x = kv_matches.get('x', kv_matches.get('north'))
         y = kv_matches.get('y', kv_matches.get('east'))
         alt = kv_matches.get('h', kv_matches.get('altitude', kv_matches.get('height')))
+        direction_north, direction_east = _direction_offsets(normalized)
         
         if x is None:
             x_match = re.search(r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters)\s*north\b', normalized)
@@ -171,6 +188,13 @@ def parse_mission(text: str) -> list[dict]:
             y_match = re.search(r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters)\s*east\b', normalized)
             if y_match:
                 y = _normalize_distance_m(float(y_match.group(1)), y_match.group(2))
+
+        if x is None:
+            x = direction_north
+        if y is None:
+            y = direction_east
+        if x == 0.0 and y == 0.0 and alt is None:
+            raise ValueError("goto command needs a distance or target coordinate")
         
         tasks.append({
             'task': 'GOTO', 
@@ -213,6 +237,35 @@ def parse_mission(text: str) -> list[dict]:
     if has_rtl: tasks.append({'task': 'RTL'})
         
     return tasks
+
+
+def _direction_offsets(text: str) -> tuple[float, float]:
+    north_m = 0.0
+    east_m = 0.0
+    directions = "|".join(sorted(DIRECTION_AXES, key=len, reverse=True))
+    patterns = (
+        rf"\b([-+]?\d+(?:\.\d+)?)\s*{DIRECTION_UNIT_PATTERN}\s*(?:to\s+the\s+)?({directions})\b",
+        rf"\b({directions})\s*([-+]?\d+(?:\.\d+)?)\s*{DIRECTION_UNIT_PATTERN}\b",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            if match.lastindex != 3:
+                continue
+            if match.group(1) in DIRECTION_AXES:
+                direction = match.group(1)
+                value = float(match.group(2))
+                unit = match.group(3)
+            else:
+                value = float(match.group(1))
+                unit = match.group(2)
+                direction = match.group(3)
+            axis, sign = DIRECTION_AXES[direction]
+            distance_m = sign * _normalize_distance_m(value, unit)
+            if axis == "north":
+                north_m += distance_m
+            else:
+                east_m += distance_m
+    return north_m, east_m
 
 
 def parse_task_sequence(
@@ -381,30 +434,28 @@ def _square_search_targets(
     altitude_m: float,
 ) -> list[LocalTarget]:
     size_m = _positive(task.params["size"], "size")
-    half = size_m / 2.0
     center_n = origin.local_north_m
     center_e = origin.local_east_m
-    corners = [
-        (-half, -half),
-        (half, -half),
-        (half, half),
-        (-half, half),
-        (-half, -half),
-    ]
-    targets = [
-        LocalTarget(
-            f"square-{index}",
-            center_n + north,
-            center_e + east,
-            -altitude_m,
-        )
-        for index, (north, east) in enumerate(corners)
-    ]
 
     passes = max(0, int(task.params.get("passes", 0)))
     if "search" not in task.raw_text.lower() or passes <= 0:
-        return targets
+        corners = [
+            (center_n + size_m, center_e),
+            (center_n + size_m, center_e + size_m),
+            (center_n, center_e + size_m),
+            (center_n, center_e),
+        ]
+        return [
+            LocalTarget(
+                f"square-{index}",
+                north,
+                east,
+                -altitude_m,
+            )
+            for index, (north, east) in enumerate(corners, start=1)
+        ]
 
+    half = size_m / 2.0
     lane_spacing = size_m / max(1, passes)
     lanes: list[LocalTarget] = []
     for index in range(passes + 1):

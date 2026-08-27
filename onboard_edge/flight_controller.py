@@ -361,18 +361,17 @@ class FlightController:
             target.east_m,
             target.down_m,
         )
-        
-        # 1. SEND EXACTLY ONCE
-        self.mavlink.send_local_position_target(
-            target.north_m,
-            target.east_m,
-            target.down_m,
-            yaw_rad=_yaw_rad(target.yaw_deg),
-        )
-        
+
+        interval_s = 1.0 / max(1.0, self.config.setpoint_rate_hz)
         deadline = time.monotonic() + self.config.waypoint_timeout_s
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
+            self.mavlink.send_local_position_target(
+                target.north_m,
+                target.east_m,
+                target.down_m,
+                yaw_rad=_yaw_rad(target.yaw_deg),
+            )
             local = self._current_local_position()
             if local is not None:
                 distance = local_distance_m(target, *local)
@@ -385,7 +384,7 @@ class FlightController:
                     if target.hold_s > 0:
                         await asyncio.sleep(target.hold_s)
                     return
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(interval_s)
         raise FlightAbort(f"local waypoint {target.name} timed out")
 
     async def _fly_global_target(self, target: GlobalTarget) -> None:
@@ -396,18 +395,17 @@ class FlightController:
             target.lon_deg,
             target.relative_alt_m,
         )
-        
-        # 1. SEND EXACTLY ONCE
-        self.mavlink.send_global_position_target(
-            target.lat_deg,
-            target.lon_deg,
-            target.relative_alt_m,
-            yaw_rad=_yaw_rad(target.yaw_deg),
-        )
-        
+
+        interval_s = 1.0 / max(1.0, self.config.setpoint_rate_hz)
         deadline = time.monotonic() + self.config.waypoint_timeout_s
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
+            self.mavlink.send_global_position_target(
+                target.lat_deg,
+                target.lon_deg,
+                target.relative_alt_m,
+                yaw_rad=_yaw_rad(target.yaw_deg),
+            )
             global_position = self._current_global_position()
             if global_position is not None:
                 lat, lon, relative_alt = global_position
@@ -422,7 +420,7 @@ class FlightController:
                     if target.hold_s > 0:
                         await asyncio.sleep(target.hold_s)
                     return
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(interval_s)
         raise FlightAbort(f"global waypoint {target.name} timed out")
 
     async def _watchdog_loop(self) -> None:
