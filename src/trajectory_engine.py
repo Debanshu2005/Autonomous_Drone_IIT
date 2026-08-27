@@ -122,50 +122,94 @@ def _normalize_distance_m(value: float, unit: str) -> float:
     return value
 
 def parse_mission(text: str) -> list[dict]:
-    normalized = text.lower()
+    normalized = _normalize_text(text)
+    tasks = []
     
-    # 2. Regex Scanning
-    has_takeoff = bool(re.search(r'\btakeoff\b|\btake-off\b|\btake off\b', normalized))
+    kv_matches = {}
+    for match in re.finditer(r'\b([a-z_]+)\s*=\s*(\d+(?:\.\d+)?)\b', normalized):
+        kv_matches[match.group(1)] = float(match.group(2))
+
+    mode_match = re.search(r'\b(?:switch\s+)?mode\s+(?:to\s+)?([a-z_]+)\b', normalized)
+    if mode_match:
+        tasks.append({'task': 'SET_MODE', 'mode': mode_match.group(1)})
+
+    has_takeoff = bool(re.search(r'\btakeoff\b', normalized))
     has_hover = bool(re.search(r'\bhover\b', normalized))
     has_land = bool(re.search(r'\bland\b', normalized))
     has_rtl = bool(re.search(r'\brtl\b|\breturn\b', normalized))
     has_hold = bool(re.search(r'\bhold\b|\bloiter\b', normalized))
-    
+    has_goto = bool(re.search(r'\bgoto\b|\bgo\b', normalized))
     shape_match = re.search(r'\b(circle|square|triangle|spiral|figure-8|grid)\b', normalized)
-    has_formation = bool(shape_match)
 
-    tasks = []
-    
-    # 4. Sequential Queue Generation
     if has_takeoff:
-        alt_match = re.search(r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters|kilometer|kilometers|centimeter|centimeters)\b', normalized)
-        takeoff_alt = _normalize_distance_m(float(alt_match.group(1)), alt_match.group(2)) if alt_match else 2.0
-        tasks.append({'task': 'TAKEOFF', 'alt': takeoff_alt})
+        alt = kv_matches.get('h', kv_matches.get('altitude', kv_matches.get('height')))
+        if alt is None:
+            alt_match = re.search(r'(?:takeoff|to)\s*(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters|kilometer|kilometers|centimeter|centimeters)\b', normalized)
+            if alt_match:
+                alt = _normalize_distance_m(float(alt_match.group(1)), alt_match.group(2))
+        tasks.append({'task': 'TAKEOFF', 'alt': alt if alt is not None else 2.0})
 
     if has_hover:
-        time_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b', normalized)
-        hover_s = float(time_match.group(1)) if time_match else 5.0
-        tasks.append({'task': 'HOVER', 'time': hover_s})
+        hover_s = kv_matches.get('hover_s', kv_matches.get('seconds'))
+        if hover_s is None:
+            time_match = re.search(r'(?:hover|for)\s*(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b', normalized)
+            if time_match:
+                hover_s = float(time_match.group(1))
+        tasks.append({'task': 'HOVER', 'time': hover_s if hover_s is not None else 5.0})
+
+    if has_goto and not shape_match:
+        x = kv_matches.get('x', kv_matches.get('north'))
+        y = kv_matches.get('y', kv_matches.get('east'))
+        alt = kv_matches.get('h', kv_matches.get('altitude', kv_matches.get('height')))
         
-    if has_formation:
+        if x is None:
+            x_match = re.search(r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters)\s*north\b', normalized)
+            if x_match:
+                x = _normalize_distance_m(float(x_match.group(1)), x_match.group(2))
+        if y is None:
+            y_match = re.search(r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters)\s*east\b', normalized)
+            if y_match:
+                y = _normalize_distance_m(float(y_match.group(1)), y_match.group(2))
+        
+        tasks.append({
+            'task': 'GOTO', 
+            'x': x if x is not None else 0.0, 
+            'y': y if y is not None else 0.0, 
+            'alt': alt if alt is not None else 3.0
+        })
+
+    if shape_match:
         shape_name = shape_match.group(1)
+        scale = kv_matches.get('r', kv_matches.get('radius', kv_matches.get('size', kv_matches.get('side'))))
+        if scale is None:
+            scale_match = re.search(r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters)\b', normalized)
+            if scale_match:
+                scale = _normalize_distance_m(float(scale_match.group(1)), scale_match.group(2))
         
-        scale_match = re.search(r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters|kilometer|kilometers|centimeter|centimeters)\b', normalized)
-        scale = _normalize_distance_m(float(scale_match.group(1)), scale_match.group(2)) if scale_match else 5.0
+        duration = kv_matches.get('hover_s', kv_matches.get('seconds', kv_matches.get('duration')))
+        if duration is None:
+            duration_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b', normalized)
+            if duration_match:
+                duration = float(duration_match.group(1))
+
+        alt = kv_matches.get('h', kv_matches.get('altitude', kv_matches.get('height')))
         
-        duration_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b', normalized)
-        duration = float(duration_match.group(1)) if duration_match else 10.0
+        task_dict = {
+            'task': 'FORMATION', 
+            'shape': shape_name, 
+            'scale': scale if scale is not None else 5.0, 
+            'duration': duration if duration is not None else 10.0,
+            'alt': alt if alt is not None else 3.0
+        }
         
-        tasks.append({'task': 'FORMATION', 'shape': shape_name, 'scale': scale, 'duration': duration})
+        if 'n' in kv_matches: task_dict['n'] = kv_matches['n']
+        if 'passes' in kv_matches: task_dict['passes'] = kv_matches['passes']
+            
+        tasks.append(task_dict)
         
-    if has_hold:
-        tasks.append({'task': 'HOLD'})
-        
-    if has_land:
-        tasks.append({'task': 'LAND'})
-        
-    if has_rtl:
-        tasks.append({'task': 'RTL'})
+    if has_hold: tasks.append({'task': 'HOLD'})
+    if has_land: tasks.append({'task': 'LAND'})
+    if has_rtl: tasks.append({'task': 'RTL'})
         
     return tasks
 
@@ -190,8 +234,24 @@ def parse_task_sequence(
                 params['size'] = d['scale']
             if 'duration' in d:
                 params['hover_s'] = d['duration']
-            if action == TaskAction.CIRCLE:
+            if 'n' in d:
+                params['n'] = d['n']
+            elif action == TaskAction.CIRCLE:
                 params['n'] = 36.0
+            if 'passes' in d:
+                params['passes'] = d['passes']
+            if 'alt' in d:
+                params['h'] = d['alt']
+        elif action_str == 'SET_MODE':
+            action = TaskAction.SET_MODE
+            tasks.append(ParsedTask(action, {}, text, notes=(f"mode={d['mode']}",)))
+            continue
+        elif action_str == 'GOTO':
+            action = TaskAction.GOTO
+            params['north'] = d.get('x', 0.0)
+            params['east'] = d.get('y', 0.0)
+            if 'alt' in d:
+                params['h'] = d['alt']
         else:
             action = TaskAction(action_str.lower())
             if 'alt' in d:
@@ -472,7 +532,7 @@ def command_guide() -> str:
         "    y / east: east offset in meters\n"
         "    size / side: square side length in meters\n"
         "    passes: lawnmower search passes inside square\n"
-        "    hover_s / seconds: hover duration in seconds"
+        "    hover_s / seconds: hover duration in seconds\n"
     )
 
 

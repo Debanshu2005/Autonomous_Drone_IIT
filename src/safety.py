@@ -27,8 +27,15 @@ class SafetyMonitor:
         self._watchdog_thread.start()
         
         loop = asyncio.get_running_loop()
+        self._shutdown_count = 0
         
         def _signal_handler(signum, frame):
+            self._shutdown_count += 1
+            if self._shutdown_count > 1:
+                LOGGER.error("CRITICAL: Hard abort initiated via double-tap Ctrl+C.")
+                import sys
+                sys.exit(1)
+                
             LOGGER.warning(f"Signal {signum} caught by safety monitor.")
             asyncio.run_coroutine_threadsafe(self._emergency_shutdown(), loop)
 
@@ -39,7 +46,21 @@ class SafetyMonitor:
             LOGGER.error(f"Failed to set signal handler: {exc}")
 
     async def _emergency_shutdown(self) -> None:
-        LOGGER.error("CRITICAL: SIGINT received. Executing emergency shutdown!")
+        import sys
+        LOGGER.error("CRITICAL: SIGINT received. Evaluating vehicle state...")
+        
+        # Telemetry Pre-Check
+        report = self.sensors.snapshot()
+        altitude_m = -report.local_position.down_m if report.local_position.valid else 0.0
+        
+        # 2. Conditional Branching (Grounded or Disarmed)
+        if not report.armed or altitude_m <= 0.2:
+            LOGGER.info("[STATUS] Vehicle is grounded/disarmed. Exiting immediately.")
+            await self.repl.stop()
+            sys.exit(0)
+            
+        # 2. Conditional Branching (Airborne & Armed)
+        LOGGER.info(f"[STATUS] Vehicle is airborne (Alt: {altitude_m:.1f}m) and armed. Executing emergency soft-land...")
         
         # 1. Abort active tasks
         self.repl._flush_queue()
@@ -65,6 +86,7 @@ class SafetyMonitor:
             
         # 4. Clean exit
         await self.repl.stop()
+        sys.exit(0)
 
     def _watchdog_loop(self) -> None:
         while not self._stop_watchdog.is_set():
