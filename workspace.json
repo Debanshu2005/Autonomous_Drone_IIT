@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-26T12:49:48.010Z",
-  "generatedAtEpochMs": 1787748588010,
+  "generatedAt": "2026-08-27T06:20:51.639Z",
+  "generatedAtEpochMs": 1787811651639,
   "generator": {
     "name": "Code Janitor",
     "feature": "workspace-memory"
@@ -14,7 +14,7 @@
   "workspace": {
     "name": "Autonomous_Drone_IIT",
     "root": "d:\\CityGrid\\my-project\\Autonomous_Drone_IIT",
-    "activeFile": "src/autonomous_mission.py",
+    "activeFile": "src/main.py",
     "refreshReason": "startup",
     "outputFiles": {
       "markdown": "graphify-out/WORKSPACE_MEMORY.md",
@@ -22,15 +22,20 @@
       "structuredManifest": "workspace.json"
     },
     "suggestedStartingPoints": [
-      "src/autonomous_mission.py",
+      "src/main.py",
+      ".gitignore",
       "README.md"
     ],
     "stats": {
-      "totalFiles": 10,
+      "totalFiles": 17,
       "topLevelAreas": [
         {
           "name": "[root]",
-          "count": 5
+          "count": 6
+        },
+        {
+          "name": "src",
+          "count": 6
         },
         {
           "name": "scripts",
@@ -41,15 +46,19 @@
           "count": 1
         },
         {
-          "name": "missions",
+          "name": "legacy",
           "count": 1
         },
         {
-          "name": "src",
+          "name": "missions",
           "count": 1
         }
       ],
       "primaryFileTypes": [
+        {
+          "name": ".py",
+          "count": 7
+        },
         {
           "name": ".md",
           "count": 3
@@ -59,11 +68,11 @@
           "count": 2
         },
         {
-          "name": ".ps1",
-          "count": 1
+          "name": "[no extension]",
+          "count": 2
         },
         {
-          "name": ".py",
+          "name": ".ps1",
           "count": 1
         },
         {
@@ -73,16 +82,19 @@
         {
           "name": ".txt",
           "count": 1
-        },
-        {
-          "name": "[no extension]",
-          "count": 1
         }
       ],
       "keyFiles": [
+        ".gitignore",
         "README.md"
       ],
       "fileInventory": [
+        {
+          "path": ".gitignore",
+          "topLevelArea": "[root]",
+          "extension": "[no extension]",
+          "isKeyFile": true
+        },
         {
           "path": ".janitor-audit-log",
           "topLevelArea": "[root]",
@@ -93,6 +105,12 @@
           "path": "docs/failsafe_checklist.md",
           "topLevelArea": "docs",
           "extension": ".md",
+          "isKeyFile": false
+        },
+        {
+          "path": "legacy/autonomous_mission.py",
+          "topLevelArea": "legacy",
+          "extension": ".py",
           "isKeyFile": false
         },
         {
@@ -126,7 +144,37 @@
           "isKeyFile": false
         },
         {
-          "path": "src/autonomous_mission.py",
+          "path": "src/flight_controller.py",
+          "topLevelArea": "src",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
+          "path": "src/main.py",
+          "topLevelArea": "src",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
+          "path": "src/mavlink_io.py",
+          "topLevelArea": "src",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
+          "path": "src/sensor_check.py",
+          "topLevelArea": "src",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
+          "path": "src/terminal_ui.py",
+          "topLevelArea": "src",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
+          "path": "src/trajectory_engine.py",
           "topLevelArea": "src",
           "extension": ".py",
           "isKeyFile": false
@@ -167,7 +215,7 @@
   "git": {
     "available": true,
     "branch": "master",
-    "headSummary": "2026-08-09 58e00c2 updates",
+    "headSummary": "2026-08-26 adc81ba feat: implement trajectory engine and base infrastructure for autonomous drone control",
     "statusSummary": "3 modifieds",
     "changedFileCount": 3,
     "statusLines": [

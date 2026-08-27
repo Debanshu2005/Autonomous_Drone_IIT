@@ -1,6 +1,6 @@
 # Workspace Memory
 This file is maintained automatically by Code Janitor so Claude, Codex, Bob, and any other AI agent can reuse repo context without rescanning everything from scratch.
-Generated: 2026-08-26T12:49:48.010Z
+Generated: 2026-08-27T06:20:51.639Z
 Workspace: Autonomous_Drone_IIT
 Workspace root: d:\CityGrid\my-project\Autonomous_Drone_IIT
 Refresh reason: startup
@@ -18,15 +18,15 @@ Structured manifest: workspace.json
 - Graphify graph: not available yet
 - Last activity: no tracked activity yet
 ## Workspace Focus
-- Active file in focus: src/autonomous_mission.py
+- Active file in focus: src/main.py
 - Hottest files right now: none yet
-- Suggested starting points: src/autonomous_mission.py, README.md
+- Suggested starting points: src/main.py, .gitignore, README.md
 ## Current Workspace
-- Active file: src/autonomous_mission.py
-- Tracked files in snapshot: 10
-- Top-level areas: [root] (5), scripts (2), docs (1), missions (1), src (1)
-- Primary file types: .md (3), .json (2), .ps1 (1), .py (1), .sh (1), .txt (1), [no extension] (1)
-- Key files: README.md
+- Active file: src/main.py
+- Tracked files in snapshot: 17
+- Top-level areas: [root] (6), src (6), scripts (2), docs (1), legacy (1), missions (1)
+- Primary file types: .py (7), .md (3), .json (2), [no extension] (2), .ps1 (1), .sh (1), .txt (1)
+- Key files: .gitignore, README.md
 ## Package Snapshot
 - Package metadata unavailable: package.json was not found.
 ## Current Stack
@@ -45,7 +45,7 @@ Structured manifest: workspace.json
 
 ## Git Snapshot
 - Branch: master
-- HEAD: 2026-08-09 58e00c2 updates
+- HEAD: 2026-08-26 adc81ba feat: implement trajectory engine and base infrastructure for autonomous drone control
 - Working tree summary: 3 modifieds
 - M graphify-out/WORKSPACE_MEMORY.md
 - M workspace.json

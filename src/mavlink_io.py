@@ -137,8 +137,8 @@ class MavlinkConnection:
         if heartbeat is None:
             raise MavlinkError(f"no heartbeat from Pixhawk within {heartbeat_timeout_s:.0f}s")
 
-        self.target_system = int(self.master.target_system)
-        self.target_component = int(self.master.target_component)
+        self.target_system = 1
+        self.target_component = 1
         self._cache_message(heartbeat)
         LOGGER.info(
             "MAVLink heartbeat received from system=%s component=%s",
@@ -179,6 +179,8 @@ class MavlinkConnection:
                 await asyncio.sleep(0.02)
                 continue
             if msg.get_type() == "BAD_DATA":
+                continue
+            if not msg or msg.get_srcSystem() != 1:
                 continue
             self._cache_message(msg)
 
@@ -224,8 +226,8 @@ class MavlinkConnection:
             mavutil.mavlink.MAV_DATA_STREAM_RC_CHANNELS,
         ):
             self.master.mav.request_data_stream_send(
-                self.target_system,
-                self.target_component,
+                1,  # target_system
+                1,  # target_component
                 stream_id,
                 rate_hz,
                 1,
@@ -234,8 +236,8 @@ class MavlinkConnection:
     async def set_message_interval(self, message_id: int, rate_hz: float) -> None:
         interval_us = -1 if rate_hz <= 0 else int(1_000_000 / rate_hz)
         self.master.mav.command_long_send(
-            self.target_system,
-            self.target_component,
+            1,  # target_system
+            1,  # target_component
             mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
             0,
             message_id,
@@ -257,8 +259,8 @@ class MavlinkConnection:
     ) -> Any:
         sent_at = time.monotonic()
         self.master.mav.command_long_send(
-            self.target_system,
-            self.target_component,
+            1,  # target_system
+            1,  # target_component
             command,
             0,
             *params,
@@ -288,7 +290,11 @@ class MavlinkConnection:
             raise MavlinkError(f"mode {mode_name!r} is unavailable; modes reported: {available}")
 
         sent_at = time.monotonic()
-        self.master.set_mode(mode_id)
+        self.master.mav.set_mode_send(
+            1,  # target_system
+            mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+            mode_id,
+        )
         await self.wait_for_message(
             "HEARTBEAT",
             timeout_s=timeout_s,
@@ -366,8 +372,8 @@ class MavlinkConnection:
             yaw_value = yaw_rad
         self.master.mav.set_position_target_global_int_send(
             int(time.monotonic() * 1000) & 0xFFFFFFFF,
-            self.target_system,
-            self.target_component,
+            1,  # target_system
+            1,  # target_component
             mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
             type_mask,
             int(lat_deg * 1e7),
@@ -407,8 +413,8 @@ class MavlinkConnection:
             yaw_value = yaw_rad
         self.master.mav.set_position_target_local_ned_send(
             int(time.monotonic() * 1000) & 0xFFFFFFFF,
-            self.target_system,
-            self.target_component,
+            1,  # target_system
+            1,  # target_component
             mavutil.mavlink.MAV_FRAME_LOCAL_NED,
             type_mask,
             north_m,
@@ -443,8 +449,8 @@ class MavlinkConnection:
         )
         self.master.mav.set_position_target_local_ned_send(
             int(time.monotonic() * 1000) & 0xFFFFFFFF,
-            self.target_system,
-            self.target_component,
+            1,  # target_system
+            1,  # target_component
             mavutil.mavlink.MAV_FRAME_BODY_NED,
             type_mask,
             0,
