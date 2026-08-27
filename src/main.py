@@ -332,16 +332,14 @@ async def amain() -> int:
     )
     repl = MissionRepl(mavlink, sensors, controller, config, printer)
 
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, lambda: asyncio.create_task(repl.stop()))
-        except NotImplementedError:
-            pass
+    from safety import SafetyMonitor
+    safety_monitor = SafetyMonitor(repl, min_battery_voltage_v=config.critical_battery_voltage_v or 10.5)
+    safety_monitor.start()
 
     try:
         await repl.run()
     finally:
+        safety_monitor.stop()
         await mavlink.close()
     return 0
 
