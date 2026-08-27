@@ -27,11 +27,16 @@ class SafetyMonitor:
         self._watchdog_thread.start()
         
         loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, lambda: asyncio.create_task(self._emergency_shutdown()))
-            except NotImplementedError:
-                pass
+        
+        def _signal_handler(signum, frame):
+            LOGGER.warning(f"Signal {signum} caught by safety monitor.")
+            asyncio.run_coroutine_threadsafe(self._emergency_shutdown(), loop)
+
+        try:
+            signal.signal(signal.SIGINT, _signal_handler)
+            signal.signal(signal.SIGTERM, _signal_handler)
+        except Exception as exc:
+            LOGGER.error(f"Failed to set signal handler: {exc}")
 
     async def _emergency_shutdown(self) -> None:
         LOGGER.error("CRITICAL: SIGINT received. Executing emergency shutdown!")
