@@ -37,13 +37,14 @@ class RichDashboard:
         
         self.console = Console()
         self.layout = Layout()
-        self._init_layout()
         
         self._logs: list[Text] = []
         self._max_logs = 50
         
         self._input_buffer = ""
         self._cmd_queue: asyncio.Queue[str] = asyncio.Queue()
+        
+        self._init_layout()
         
         self._stop_event = threading.Event()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -165,20 +166,20 @@ class RichDashboard:
                 try:
                     char = msvcrt.getch()
                     
-                    if char in (b'\\x03', b'\\x1a'):  # Ctrl+C or Ctrl+Z
+                    if char in (b'\x03', b'\x1a'):  # Ctrl+C or Ctrl+Z
                         pass # Handled by signal handler in safety.py
-                    elif char in (b'\\r', b'\\n'):
+                    elif char in (b'\r', b'\n'):
                         # Enter pressed
                         cmd = self._input_buffer.strip()
                         self._input_buffer = ""
                         self._update_footer()
                         if cmd and self._loop:
                             asyncio.run_coroutine_threadsafe(self._cmd_queue.put(cmd), self._loop)
-                    elif char == b'\\x08':
+                    elif char == b'\x08':
                         # Backspace
                         self._input_buffer = self._input_buffer[:-1]
                         self._update_footer()
-                    elif char in (b'\\x00', b'\\xe0'):
+                    elif char in (b'\x00', b'\xe0'):
                         # Arrow keys (ignore)
                         msvcrt.getch()
                     else:
