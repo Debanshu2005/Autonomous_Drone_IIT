@@ -1,2 +1,3 @@
 # Laptop Ground Station Dependencies
-# No external dependencies required. Uses only standard libraries (socket, threading, sys, time).
+textual>=0.40.0
+rich>=13.0.0

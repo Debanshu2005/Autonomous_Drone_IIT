@@ -38,6 +38,7 @@ class EdgeBrain:
         
         self.server_sock = None
         self.client_sock = None
+        self._client_lock = threading.Lock()
         
         self._stop_event = asyncio.Event()
 
@@ -126,15 +127,65 @@ class EdgeBrain:
         # Broadcast to all for now if no specific sysid targeted
         try:
             sequence = parse_task_sequence(cmd)
+            self._send_client_line(f"[STATUS] Parsed command: queued {len(sequence.tasks)} task(s).")
             for sysid in self.controllers:
                 asyncio.create_task(self._execute_sequence(sysid, sequence))
         except Exception as e:
             msg = f"Command parse error: {e}"
             LOGGER.error(msg)
-            if self.client_sock:
-                try:
-                    self.client_sock.sendall(f"{msg}\n".encode('utf-8'))
-                except: pass
+            self._send_client_line(f"[ERROR] {msg}")
+
+    def _send_client_line(self, line: str) -> None:
+        if not self.client_sock or not self.client_connected:
+            return
+        payload = line if line.endswith("\n") else f"{line}\n"
+        try:
+            with self._client_lock:
+                self.client_sock.sendall(payload.encode("utf-8"))
+        except Exception as exc:
+            LOGGER.warning("Failed to send laptop client message: %s", exc)
+            self.client_connected = False
+
+    @staticmethod
+    def _line_with_sysid(sysid: int, line: str) -> str:
+        if line.startswith("[") and "] " in line:
+            return line.replace("] ", f"] SYSID:{sysid} ", 1)
+        return f"[SYSID:{sysid}] {line}"
+
+    @staticmethod
+    def _nav_label(report) -> str:
+        mode = str(report.mode.value).lower()
+        if "gps-enabled" in mode:
+            return "GPS"
+        if "gps-denied" in mode or "optical" in mode:
+            return "FLOW"
+        return "NONE"
+
+    @staticmethod
+    def _telemetry_line(sysid: int, report) -> str:
+        battery = "BAT: --"
+        if report.battery.remaining_percent is not None:
+            battery = f"BAT: {report.battery.remaining_percent * 100:.0f}%"
+            if report.battery.voltage_v is not None:
+                battery += f" ({report.battery.voltage_v:.2f}V)"
+        elif report.battery.voltage_v is not None:
+            battery = f"BAT: -- ({report.battery.voltage_v:.2f}V)"
+
+        local = report.local_position
+        global_position = report.global_position
+        altitude_m = (
+            global_position.relative_alt_m
+            if global_position.valid
+            else (-local.down_m if local.valid else 0.0)
+        )
+
+        return (
+            f"[TELEM] SYSID:{sysid} MODE:{report.autopilot_mode} | "
+            f"ARMED:{str(report.armed).lower()} | {battery} | "
+            f"ALT:{altitude_m:.1f}m | NAV:{EdgeBrain._nav_label(report)} | "
+            f"POS:({local.north_m:.1f}, {local.east_m:.1f}, {local.down_m:.1f}) | "
+            f"GPS:({global_position.lat_deg:.7f}, {global_position.lon_deg:.7f})"
+        )
 
     async def start(self):
         LOGGER.info(f"Connecting to Pixhawk v6x at {self.serial_url}...")
@@ -155,6 +206,11 @@ class EdgeBrain:
             await sensors.request_required_messages()
             self.sensors_map[sysid] = sensors
             
+            def status_sink(message: str, sysid=sysid) -> None:
+                line = self._line_with_sysid(sysid, message)
+                LOGGER.info(line)
+                self._send_client_line(line)
+
             controller = FlightController(
                 conn,
                 sensors,
@@ -168,7 +224,7 @@ class EdgeBrain:
                     max_altitude_m=15.0,
                     final_action="hold",
                 ),
-                status_sink=lambda msg: LOGGER.info(f"[SYSID:{sysid}] {msg}"),
+                status_sink=status_sink,
             )
             self.controllers[sysid] = controller
 
@@ -187,14 +243,7 @@ class EdgeBrain:
             if self.client_sock and self.client_connected:
                 for sysid, sensors in self.sensors_map.items():
                     report = sensors.snapshot()
-                    lat = report.global_position.lat_deg
-                    lon = report.global_position.lon_deg
-                    alt = report.global_position.relative_alt_m
-                    telem = f"[TELEM] SYSID:{sysid} GPS:({lat}, {lon}) ALT:{alt}m MODE:{report.autopilot_mode}\n"
-                    try:
-                        self.client_sock.sendall(telem.encode('utf-8'))
-                    except:
-                        pass
+                    self._send_client_line(self._telemetry_line(sysid, report))
 
     async def stop(self):
         self._stop_event.set()
@@ -204,8 +253,16 @@ class EdgeBrain:
 
 
 async def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Raspberry Pi Edge Brain for Pixhawk v6x")
+    parser.add_argument("--connect", default="serial:///dev/ttyAMA0:921600", help="MAVLink connection URL (e.g. tcp:127.0.0.1:5760 for SITL/Mission Planner)")
+    parser.add_argument("--host", default="0.0.0.0", help="Host IP for socket listener")
+    parser.add_argument("--port", type=int, default=5000, help="Port for socket listener")
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-    brain = EdgeBrain()
+    
+    brain = EdgeBrain(serial_url=args.connect, host=args.host, port=args.port)
     try:
         await brain.start()
     except KeyboardInterrupt:
