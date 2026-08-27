@@ -11,19 +11,23 @@ $target = "${PiUser}@${PiHost}:${RemotePath}/"
 $files = @(
     "README.md",
     "requirements.txt",
-    "src/main.py",
-    "src/mavlink_io.py",
-    "src/sensor_check.py",
-    "src/trajectory_engine.py",
-    "src/flight_controller.py",
-    "src/terminal_ui.py",
+    "onboard_edge/requirements.txt",
+    "onboard_edge/pi_edge_brain.py",
+    "onboard_edge/mavlink_io.py",
+    "onboard_edge/sensor_check.py",
+    "onboard_edge/trajectory_engine.py",
+    "onboard_edge/flight_controller.py",
+    "onboard_edge/safety.py",
+    "ground_station/requirements.txt",
+    "ground_station/laptop_client.py",
+    "ground_station/terminal_ui.py",
     "legacy/autonomous_mission.py",
     "missions/example_mission.json",
     "docs/failsafe_checklist.md",
     "scripts/setup_pi.sh"
 )
 
-ssh "${PiUser}@${PiHost}" "mkdir -p '$RemotePath/src' '$RemotePath/legacy' '$RemotePath/missions' '$RemotePath/docs' '$RemotePath/scripts'"
+ssh "${PiUser}@${PiHost}" "mkdir -p '$RemotePath/onboard_edge' '$RemotePath/ground_station' '$RemotePath/legacy' '$RemotePath/missions' '$RemotePath/docs' '$RemotePath/scripts'"
 
 foreach ($file in $files) {
     $local = Join-Path $root $file

@@ -12,13 +12,12 @@ try:
 except ImportError:
     logging.warning("Vosk/ONNX modules missing, AI pipelines will run in stub mode.")
 
-from flight_controller import FlightAbort, FlightController, FlightControllerConfig
-from mavlink_io import SwarmManager, MavlinkError
-from sensor_check import SensorDiscovery, SensorThresholds, format_sensor_report
+from flight_controller import FlightController, FlightControllerConfig
+from mavlink_io import SwarmManager
+from sensor_check import SensorDiscovery, SensorThresholds
 from trajectory_engine import (
     VehicleOrigin,
     build_trajectory,
-    command_guide,
     parse_task_sequence,
 )
 
@@ -135,22 +134,28 @@ class EdgeBrain:
                 self.server_sock.settimeout(1.0)
                 client, addr = self.server_sock.accept()
                 LOGGER.info(f"Ground station connected from {addr}")
-                self.client_sock = client
-                self.client_connected = True
-                self.last_heartbeat_time = time.time()
+                with self._client_lock:
+                    self.client_sock = client
+                    self.client_connected = True
+                    self.last_heartbeat_time = time.time()
+                buffer = ""
                 
                 while not self._stop_event.is_set():
                     data = client.recv(1024)
                     if not data:
                         break
-                    self.last_heartbeat_time = time.time()
-                    cmd = data.decode('utf-8').strip()
-                    if cmd:
+                    buffer += data.decode("utf-8", errors="replace")
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        cmd = line.strip()
+                        if not cmd:
+                            continue
+                        self.last_heartbeat_time = time.time()
+                        if cmd == "__heartbeat__":
+                            continue
                         LOGGER.info(f"Received CMD: {cmd}")
                         asyncio.run_coroutine_threadsafe(self.process_command(cmd), loop)
-                        
-                        # Send ack back
-                        client.sendall(f"ACK: {cmd}\n".encode('utf-8'))
+                        self._send_client_line(f"ACK: {cmd}")
                         
             except socket.timeout:
                 continue
@@ -158,9 +163,10 @@ class EdgeBrain:
                 if not self._stop_event.is_set():
                     LOGGER.error(f"Socket error: {e}")
             finally:
-                if self.client_sock:
-                    self.client_sock.close()
-                    self.client_sock = None
+                with self._client_lock:
+                    if self.client_sock:
+                        self.client_sock.close()
+                        self.client_sock = None
 
     async def process_command(self, cmd: str):
         # Broadcast unless the laptop command starts with sysid:<id> or @<id>.
@@ -170,6 +176,8 @@ class EdgeBrain:
                 raise ValueError("empty command")
             sequence = parse_task_sequence(command_text)
             target_sysids = [target_sysid] if target_sysid is not None else list(self.controllers)
+            if not target_sysids:
+                raise ValueError("no connected drones")
             missing = [sysid for sysid in target_sysids if sysid not in self.controllers]
             if missing:
                 raise ValueError(f"unknown SYSID(s): {', '.join(str(sysid) for sysid in missing)}")
@@ -194,10 +202,15 @@ class EdgeBrain:
         payload = line if line.endswith("\n") else f"{line}\n"
         try:
             with self._client_lock:
+                if self.client_sock is None:
+                    return
                 self.client_sock.sendall(payload.encode("utf-8"))
         except Exception as exc:
             LOGGER.warning("Failed to send laptop client message: %s", exc)
-            self.client_connected = False
+            with self._client_lock:
+                if self.client_sock:
+                    self.client_sock.close()
+                    self.client_sock = None
 
     @staticmethod
     def _line_with_sysid(sysid: int, line: str) -> str:
@@ -300,6 +313,11 @@ class EdgeBrain:
 
     async def stop(self):
         self._stop_event.set()
+        self.client_connected = False
+        with self._client_lock:
+            if self.client_sock:
+                self.client_sock.close()
+                self.client_sock = None
         if self.server_sock:
             self.server_sock.close()
         await self.swarm.close_all()

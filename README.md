@@ -23,7 +23,7 @@ Built using the `Textual` framework, the interactive terminal UI features a pers
   - Commands include takeoff, hover, land, GOTO offsets, circles, squares, grids, spirals, and figure-8s.
 - Arms, takes off, streams global or local NED setpoints, and verifies waypoint
   acceptance radius.
-- Monitors software failsafes during flight via `safety.py` watchdog daemon:
+- Monitors software failsafes during flight via the edge-brain/controller watchdogs:
   - MAVLink link loss (2.0s timeout triggers emergency LAND)
   - Battery critical voltage (hardcoded 10.5V triggers emergency LAND)
   - GPS/local-position degradation (pauses spatial formations with HOLD)
@@ -71,8 +71,8 @@ serial:///dev/ttyUSB0:115200
 serial:///dev/serial0:115200
 serial:///dev/ttyAMA0:57600
 serial:///dev/ttyUSB0:57600
-udpin://0.0.0.0:14550
-udpin://0.0.0.0:14540
+udpin:0.0.0.0:14550
+udpin:0.0.0.0:14540
 ```
 
 ## Run The Terminal Controller
@@ -80,7 +80,22 @@ udpin://0.0.0.0:14540
 Run the adaptive natural-language controller on the Raspberry Pi with:
 
 ```bash
-python3 src/main.py --connect serial://auto:115200 --default-altitude 3
+python3 onboard_edge/pi_edge_brain.py --connect serial://auto:115200
+```
+
+For local SITL with Mission Planner already connected to `tcp:127.0.0.1:5760`,
+use one of the extra SITL TCP outputs:
+
+```powershell
+python onboard_edge/pi_edge_brain.py --connect tcp:127.0.0.1:5762
+python ground_station/laptop_client.py 127.0.0.1 --port 5000
+```
+
+For swarm runs, repeat `--connect` once per vehicle and make sure every vehicle
+has a unique MAVLink system ID:
+
+```bash
+python3 onboard_edge/pi_edge_brain.py --connect tcp:127.0.0.1:5762 --connect tcp:127.0.0.1:5772
 ```
 
 Common REPL commands:
@@ -95,7 +110,13 @@ mode alt_hold
 fly in a 5m radius circle at 3m altitude
 square search pattern 10m h=3
 spiral size=10 h=5 duration=20
+triangle size=6 h=3
+grid size=10 h=3 passes=4
+figure-8 size=5 h=3
 go 10 meters north and 5 meters east at 3 meters altitude
+go 5 meters high
+climb 2 meters
+descend 1 meter
 goto x=10 y=5 h=3
 hold
 land
@@ -167,7 +188,8 @@ To see the exact raw battery and altitude messages reaching the Pi over USB:
 python3 legacy/autonomous_mission.py --config missions/example_mission.json --raw-mavlink-probe
 ```
 
-The active controller modules live in `src/`.
+The active controller modules live in `onboard_edge/`; the laptop terminal UI
+lives in `ground_station/`.
 
 ## Battery Telemetry Settings
 

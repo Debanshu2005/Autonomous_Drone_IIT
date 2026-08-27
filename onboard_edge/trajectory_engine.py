@@ -22,7 +22,7 @@ EARTH_RADIUS_M = 6378137.0
 DISTANCE_UNIT_PATTERN = r"(?:m|meter|meters|metre|metres)?"
 DISTANCE_UNIT_WORD_PATTERN = r"(?:meters|meter|metres|metre|m)"
 TIME_UNIT_PATTERN = r"(?:seconds|second|secs|sec|s)"
-DIRECTION_UNIT_PATTERN = r"(cm|m|km|meter|meters|metre|metres|kilometer|kilometers|centimeter|centimeters)"
+DIRECTION_UNIT_PATTERN = r"(cm|m|km|meter|meters|metre|metres|kilometer|kilometers|centimeter|centimeters)?"
 DIRECTION_AXES = {
     "north": ("north", 1.0),
     "forward": ("north", 1.0),
@@ -37,6 +37,12 @@ DIRECTION_AXES = {
     "right": ("east", 1.0),
     "west": ("east", -1.0),
     "left": ("east", -1.0),
+    "down": ("down", 1.0),
+    "descend": ("down", 1.0),
+    "lower": ("down", 1.0),
+    "up": ("down", -1.0),
+    "ascend": ("down", -1.0),
+    "climb": ("down", -1.0),
 }
 
 
@@ -131,31 +137,36 @@ class TrajectoryPlan:
 
 
 def _normalize_distance_m(value: float, unit: str) -> float:
-    unit = unit.lower()
+    unit = (unit or "m").lower()
     if unit.startswith('c'):
         return value * 0.01
     elif unit.startswith('k'):
         return value * 1000.0
     return value
 
-def parse_mission(text: str) -> list[dict]:
+def parse_mission(
+    text: str,
+    default_altitude_m: float = 3.0,
+    default_hover_s: float = 2.0,
+) -> list[dict]:
     normalized = _normalize_text(text)
     tasks = []
     
     kv_matches = {}
-    for match in re.finditer(r'\b([a-z_]+)\s*=\s*(\d+(?:\.\d+)?)\b', normalized):
+    for match in re.finditer(r'\b([a-z_]+)\s*=\s*([-+]?\d+(?:\.\d+)?)\b', normalized):
         kv_matches[match.group(1)] = float(match.group(2))
 
-    mode_match = re.search(r'\b(?:switch\s+)?mode\s+(?:to\s+)?([a-z_]+)\b', normalized)
-    if mode_match:
-        tasks.append({'task': 'SET_MODE', 'mode': mode_match.group(1)})
+    mode_name = _mode_request(normalized)
+    if mode_name:
+        tasks.append({'task': 'SET_MODE', 'mode': mode_name})
+    action_text = _remove_mode_request_text(normalized) if mode_name else normalized
 
     has_takeoff = bool(re.search(r'\btakeoff\b', normalized))
     has_hover = bool(re.search(r'\bhover\b', normalized))
-    has_land = bool(re.search(r'\bland\b', normalized))
-    has_rtl = bool(re.search(r'\brtl\b|\breturn\b', normalized))
-    has_hold = bool(re.search(r'\bhold\b|\bloiter\b', normalized))
-    has_goto = bool(re.search(r'\bgoto\b|\bgo\b|\bmove\b|\bfly\b', normalized))
+    has_land = bool(re.search(r'\bland\b', action_text))
+    has_rtl = bool(re.search(r'\brtl\b|\breturn\b', action_text))
+    has_hold = bool(re.search(r'\bhold\b|\bloiter\b', action_text))
+    has_goto = bool(re.search(r'\bgoto\b|\bgo\b|\bmove\b|\bfly\b|\bclimb\b|\bascend\b|\bdescend\b|\blower\b', action_text))
     shape_match = re.search(r'\b(circle|square|triangle|spiral|figure-8|grid)\b', normalized)
 
     if has_takeoff:
@@ -164,7 +175,9 @@ def parse_mission(text: str) -> list[dict]:
             alt_match = re.search(r'(?:takeoff|to|height of|altitude of|altitude|height)\s*(?:is\s*)?(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters|kilometer|kilometers|centimeter|centimeters)\b', normalized)
             if alt_match:
                 alt = _normalize_distance_m(float(alt_match.group(1)), alt_match.group(2))
-        tasks.append({'task': 'TAKEOFF', 'alt': alt if alt is not None else 2.0})
+        tasks.append({'task': 'TAKEOFF', 'alt': alt if alt is not None else default_altitude_m})
+        if 'hover_s' in kv_matches and not has_hover:
+            tasks.append({'task': 'HOVER', 'time': kv_matches['hover_s']})
 
     if has_hover:
         hover_s = kv_matches.get('hover_s', kv_matches.get('seconds'))
@@ -172,42 +185,55 @@ def parse_mission(text: str) -> list[dict]:
             time_match = re.search(r'(?:hover|for)\s*(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b', normalized)
             if time_match:
                 hover_s = float(time_match.group(1))
-        tasks.append({'task': 'HOVER', 'time': hover_s if hover_s is not None else 5.0})
+        tasks.append({'task': 'HOVER', 'time': hover_s if hover_s is not None else default_hover_s})
 
     if has_goto and not shape_match:
         x = kv_matches.get('x', kv_matches.get('north'))
         y = kv_matches.get('y', kv_matches.get('east'))
-        alt = kv_matches.get('h', kv_matches.get('altitude', kv_matches.get('height')))
-        direction_north, direction_east = _direction_offsets(normalized)
+        alt = kv_matches.get('h', kv_matches.get('altitude', kv_matches.get('height', kv_matches.get('high'))))
+        if alt is None:
+            alt_match = re.search(
+                r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters|kilometer|kilometers|centimeter|centimeters)\s*(?:high|altitude|height)\b',
+                normalized,
+            )
+            if alt_match:
+                alt = _normalize_distance_m(float(alt_match.group(1)), alt_match.group(2))
+        direction_north, direction_east, direction_down = _direction_offsets(normalized)
         
-        if x is None:
-            x_match = re.search(r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters)\s*north\b', normalized)
-            if x_match:
-                x = _normalize_distance_m(float(x_match.group(1)), x_match.group(2))
-        if y is None:
-            y_match = re.search(r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters)\s*east\b', normalized)
-            if y_match:
-                y = _normalize_distance_m(float(y_match.group(1)), y_match.group(2))
-
         if x is None:
             x = direction_north
         if y is None:
             y = direction_east
-        if x == 0.0 and y == 0.0 and alt is None:
+        if x == 0.0 and y == 0.0 and direction_down == 0.0 and alt is None:
             raise ValueError("goto command needs a distance or target coordinate")
-        
-        tasks.append({
-            'task': 'GOTO', 
-            'x': x if x is not None else 0.0, 
-            'y': y if y is not None else 0.0, 
-            'alt': alt if alt is not None else 3.0
-        })
+
+        if direction_down != 0.0 and alt is None:
+            tasks.append({
+                'task': 'MOVE_RELATIVE',
+                'dn': x if x is not None else 0.0,
+                'de': y if y is not None else 0.0,
+                'dd': direction_down,
+            })
+        else:
+            task_dict = {
+                'task': 'GOTO',
+                'x': x if x is not None else 0.0,
+                'y': y if y is not None else 0.0,
+            }
+            if alt is not None:
+                task_dict['alt'] = alt
+            tasks.append(task_dict)
 
     if shape_match:
         shape_name = shape_match.group(1)
         scale = kv_matches.get('r', kv_matches.get('radius', kv_matches.get('size', kv_matches.get('side'))))
         if scale is None:
-            scale_match = re.search(r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters)\b', normalized)
+            scale = _named_distance_m(normalized, ("radius", "size", "side"))
+        if scale is None:
+            scale_match = re.search(
+                r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters|kilometer|kilometers|centimeter|centimeters)\b',
+                normalized,
+            )
             if scale_match:
                 scale = _normalize_distance_m(float(scale_match.group(1)), scale_match.group(2))
         
@@ -217,18 +243,29 @@ def parse_mission(text: str) -> list[dict]:
             if duration_match:
                 duration = float(duration_match.group(1))
 
-        alt = kv_matches.get('h', kv_matches.get('altitude', kv_matches.get('height')))
+        alt = kv_matches.get('h', kv_matches.get('altitude', kv_matches.get('height', kv_matches.get('high'))))
+        if alt is None:
+            alt = _named_distance_m(normalized, ("altitude", "height", "high"))
+        if alt is None:
+            alt_match = re.search(
+                r'\bat\s+(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters|kilometer|kilometers|centimeter|centimeters)\b',
+                normalized,
+            )
+            if alt_match:
+                alt = _normalize_distance_m(float(alt_match.group(1)), alt_match.group(2))
         
         task_dict = {
             'task': 'FORMATION', 
             'shape': shape_name, 
             'scale': scale if scale is not None else 5.0, 
             'duration': duration if duration is not None else 10.0,
-            'alt': alt if alt is not None else 3.0
         }
+        if alt is not None:
+            task_dict['alt'] = alt
         
         if 'n' in kv_matches: task_dict['n'] = kv_matches['n']
         if 'passes' in kv_matches: task_dict['passes'] = kv_matches['passes']
+        if 'turns' in kv_matches: task_dict['turns'] = kv_matches['turns']
             
         tasks.append(task_dict)
         
@@ -239,9 +276,10 @@ def parse_mission(text: str) -> list[dict]:
     return tasks
 
 
-def _direction_offsets(text: str) -> tuple[float, float]:
+def _direction_offsets(text: str) -> tuple[float, float, float]:
     north_m = 0.0
     east_m = 0.0
+    down_m = 0.0
     directions = "|".join(sorted(DIRECTION_AXES, key=len, reverse=True))
     patterns = (
         rf"\b([-+]?\d+(?:\.\d+)?)\s*{DIRECTION_UNIT_PATTERN}\s*(?:to\s+the\s+)?({directions})\b",
@@ -249,12 +287,10 @@ def _direction_offsets(text: str) -> tuple[float, float]:
     )
     for pattern in patterns:
         for match in re.finditer(pattern, text):
-            if match.lastindex != 3:
-                continue
             if match.group(1) in DIRECTION_AXES:
                 direction = match.group(1)
                 value = float(match.group(2))
-                unit = match.group(3)
+                unit = match.group(3) if match.lastindex and match.lastindex >= 3 else None
             else:
                 value = float(match.group(1))
                 unit = match.group(2)
@@ -263,9 +299,27 @@ def _direction_offsets(text: str) -> tuple[float, float]:
             distance_m = sign * _normalize_distance_m(value, unit)
             if axis == "north":
                 north_m += distance_m
-            else:
+            elif axis == "east":
                 east_m += distance_m
-    return north_m, east_m
+            else:
+                down_m += distance_m
+    return north_m, east_m, down_m
+
+
+def _named_distance_m(text: str, names: tuple[str, ...]) -> Optional[float]:
+    name_pattern = "|".join(re.escape(name) for name in names)
+    patterns = (
+        rf"\b(?:{name_pattern})\s*(?:=|is|of|to)?\s*([-+]?\d+(?:\.\d+)?)\s*{DIRECTION_UNIT_PATTERN}\b",
+        rf"\b([-+]?\d+(?:\.\d+)?)\s*{DIRECTION_UNIT_PATTERN}\s*(?:{name_pattern})\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match is None:
+            continue
+        value = float(match.group(1))
+        unit = match.group(2)
+        return _normalize_distance_m(value, unit)
+    return None
 
 
 def parse_task_sequence(
@@ -273,7 +327,11 @@ def parse_task_sequence(
     default_altitude_m: float = 3.0,
     default_hover_s: float = 2.0,
 ) -> TaskSequence:
-    dict_tasks = parse_mission(text)
+    dict_tasks = parse_mission(
+        text,
+        default_altitude_m=default_altitude_m,
+        default_hover_s=default_hover_s,
+    )
     if not dict_tasks:
         raise ValueError("no executable tasks found")
         
@@ -294,6 +352,8 @@ def parse_task_sequence(
                 params['n'] = 36.0
             if 'passes' in d:
                 params['passes'] = d['passes']
+            if 'turns' in d:
+                params['turns'] = d['turns']
             if 'alt' in d:
                 params['h'] = d['alt']
         elif action_str == 'SET_MODE':
@@ -356,7 +416,7 @@ def build_trajectory(
         altitude_m = max(0.0, float(origin.relative_alt_m or 0.0) - task.params.get('dd', 0.0))
         north = float(origin.local_north_m or 0.0) + task.params.get('dn', 0.0)
         east = float(origin.local_east_m or 0.0) + task.params.get('de', 0.0)
-        local_targets = [LocalTarget(north, east)]
+        local_targets = [LocalTarget("move-relative", north, east, -altitude_m)]
         description = (
             f"move relative north={task.params.get('dn', 0.0):.1f}m "
             f"east={task.params.get('de', 0.0):.1f}m down={task.params.get('dd', 0.0):.1f}m"
@@ -370,6 +430,18 @@ def build_trajectory(
     elif task.action == TaskAction.SQUARE:
         local_targets = _square_search_targets(task, origin, altitude_m)
         description = f"square search size={task.params['size']:.1f}m altitude={altitude_m:.1f}m"
+    elif task.action == TaskAction.TRIANGLE:
+        local_targets = _triangle_targets(task, origin, altitude_m)
+        description = f"triangle size={task.params['size']:.1f}m altitude={altitude_m:.1f}m"
+    elif task.action == TaskAction.GRID:
+        local_targets = _grid_targets(task, origin, altitude_m)
+        description = f"grid size={task.params['size']:.1f}m altitude={altitude_m:.1f}m"
+    elif task.action == TaskAction.SPIRAL:
+        local_targets = _spiral_targets(task, origin, altitude_m)
+        description = f"spiral size={task.params['size']:.1f}m altitude={altitude_m:.1f}m"
+    elif task.action == TaskAction.FIGURE_8:
+        local_targets = _figure_8_targets(task, origin, altitude_m)
+        description = f"figure-8 size={task.params['size']:.1f}m altitude={altitude_m:.1f}m"
     elif task.action in {TaskAction.TAKEOFF, TaskAction.TAKEOFF_LAND}:
         hover_s = task.params.get("hover_s", 0.0)
         suffix = " then land" if task.action == TaskAction.TAKEOFF_LAND else ""
@@ -455,18 +527,66 @@ def _square_search_targets(
             for index, (north, east) in enumerate(corners, start=1)
         ]
 
+    return _grid_targets(task, origin, altitude_m)
+
+
+def _triangle_targets(task: ParsedTask, origin: VehicleOrigin, altitude_m: float) -> list[LocalTarget]:
+    size_m = _positive(task.params["size"], "size")
+    height_m = size_m * math.sqrt(3.0) / 2.0
+    corners = [
+        (origin.local_north_m + size_m, origin.local_east_m),
+        (origin.local_north_m + size_m / 2.0, origin.local_east_m + height_m),
+        (origin.local_north_m, origin.local_east_m),
+    ]
+    return [
+        LocalTarget(f"triangle-{index}", north, east, -altitude_m)
+        for index, (north, east) in enumerate(corners, start=1)
+    ]
+
+
+def _grid_targets(task: ParsedTask, origin: VehicleOrigin, altitude_m: float) -> list[LocalTarget]:
+    size_m = _positive(task.params["size"], "size")
     half = size_m / 2.0
-    lane_spacing = size_m / max(1, passes)
+    passes = max(1, int(task.params.get("passes", 4)))
+    lane_spacing = size_m / passes
     lanes: list[LocalTarget] = []
     for index in range(passes + 1):
-        east = center_e - half + index * lane_spacing
+        east = origin.local_east_m - half + index * lane_spacing
         if index % 2 == 0:
-            north_values = (center_n - half, center_n + half)
+            north_values = (origin.local_north_m - half, origin.local_north_m + half)
         else:
-            north_values = (center_n + half, center_n - half)
+            north_values = (origin.local_north_m + half, origin.local_north_m - half)
         for lane_end, north in enumerate(north_values):
-            lanes.append(LocalTarget(f"search-{index}-{lane_end}", north, east, -altitude_m))
+            lanes.append(LocalTarget(f"grid-{index}-{lane_end}", north, east, -altitude_m))
     return lanes
+
+
+def _spiral_targets(task: ParsedTask, origin: VehicleOrigin, altitude_m: float) -> list[LocalTarget]:
+    radius_m = _positive(task.params["size"], "size")
+    turns = max(1.0, min(6.0, float(task.params.get("turns", 2.0))))
+    segments = max(16, min(120, int(task.params.get("n", 48))))
+    targets: list[LocalTarget] = []
+    for index in range(1, segments + 1):
+        fraction = index / segments
+        radius = radius_m * fraction
+        theta = 2.0 * math.pi * turns * fraction
+        north = origin.local_north_m + radius * math.cos(theta)
+        east = origin.local_east_m + radius * math.sin(theta)
+        targets.append(LocalTarget(f"spiral-{index:02d}", north, east, -altitude_m))
+    return targets
+
+
+def _figure_8_targets(task: ParsedTask, origin: VehicleOrigin, altitude_m: float) -> list[LocalTarget]:
+    radius_m = _positive(task.params["size"], "size")
+    segments = max(24, min(120, int(task.params.get("n", 72))))
+    targets: list[LocalTarget] = []
+    for index in range(segments + 1):
+        theta = 2.0 * math.pi * index / segments
+        north = origin.local_north_m + radius_m * math.sin(theta)
+        east = origin.local_east_m + radius_m * math.sin(theta) * math.cos(theta)
+        yaw_deg = math.degrees(theta)
+        targets.append(LocalTarget(f"figure-8-{index:02d}", north, east, -altitude_m, yaw_deg=yaw_deg))
+    return targets
 
 
 def _local_target_to_global(target: LocalTarget, origin: VehicleOrigin) -> GlobalTarget:
@@ -540,8 +660,17 @@ def _mode_request(text: str) -> Optional[str]:
         match = re.search(r"\bmode\s+([a-z0-9_ -]+)\b", text)
     if match is None:
         return None
-    raw_mode = match.group(1).strip(" .")
+    raw_mode = re.split(r"\s*(?:,|\bthen\b|\band\b)\s*", match.group(1), maxsplit=1)[0].strip(" .")
     return _normalize_mode_name(raw_mode)
+
+
+def _remove_mode_request_text(text: str) -> str:
+    return re.sub(
+        r"\b(?:(?:switch|swich|change|set)\s+(?:flight\s+)?mode|mode)\s+(?:to\s+)?[a-z0-9_ -]+?(?=\s*(?:,|\bthen\b|\band\b|$))",
+        "",
+        text,
+        count=1,
+    )
 
 
 def _normalize_mode_name(raw_mode: str) -> str:
@@ -577,7 +706,11 @@ def command_guide() -> str:
         "    take off to 3 meters, hover for two seconds, and land\n"
         "    fly in a 5 meter radius circle at 3 meter altitude\n"
         "    do a 10 meter square search pattern at 3 meters\n"
+        "    fly a triangle with 6 meter sides at 3 meters\n"
+        "    fly a figure eight size 5 at 3 meters\n"
         "    go 10 meters north and 5 meters east at 3 meters altitude\n"
+        "    move 5 meters forward and 2 meters up\n"
+        "    go 5 meters high\n"
         "    hold position\n"
         "    switch mode to guided\n"
         "    switch mode to althold\n"
@@ -587,7 +720,12 @@ def command_guide() -> str:
         "    takeoff h=3 hover_s=2\n"
         "    circle r=5 h=3 n=36\n"
         "    square size=10 h=3 passes=4\n"
+        "    triangle size=6 h=3\n"
+        "    grid size=10 h=3 passes=4\n"
+        "    spiral size=10 h=3 turns=3\n"
+        "    figure-8 size=5 h=3\n"
         "    goto x=10 y=5 h=3\n"
+        "    climb 2 | descend 1 | lower 50cm\n"
         "    mode guided | mode alt_hold\n"
         "    hold | land | rtl\n"
         "  Parameter dictionary:\n"
@@ -596,6 +734,7 @@ def command_guide() -> str:
         "    n: number of circle waypoints\n"
         "    x / north: north offset in meters\n"
         "    y / east: east offset in meters\n"
+        "    forward/back/left/right/up/down: relative movement words\n"
         "    size / side: square side length in meters\n"
         "    passes: lawnmower search passes inside square\n"
         "    hover_s / seconds: hover duration in seconds\n"
@@ -607,6 +746,7 @@ def _normalize_text(text: str) -> str:
     normalized = normalized.replace("take-off", "takeoff").replace("take off", "takeoff")
     normalized = normalized.replace("secobds", "seconds").replace("secondes", "seconds")
     normalized = normalized.replace("circular", "circle")
+    normalized = normalized.replace("figure eight", "figure-8").replace("figure 8", "figure-8")
     for word, value in _NUMBER_WORDS.items():
         normalized = re.sub(rf"\b{word}\b", str(value), normalized)
     return normalized

@@ -4,6 +4,7 @@ import argparse
 import re
 import socket
 import threading
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -116,6 +117,7 @@ class GroundStationApp(App[None]):
         self.command_input.focus()
         self.system_log(f"[STATUS] Connecting to Edge Brain at {self.host}:{self.port}...")
         threading.Thread(target=self._socket_worker, daemon=True).start()
+        threading.Thread(target=self._heartbeat_worker, daemon=True).start()
 
     def on_unmount(self) -> None:
         self._stop_event.set()
@@ -204,6 +206,16 @@ class GroundStationApp(App[None]):
                     self._sock = None
             self.call_from_thread(self._set_connected, False)
             self.call_from_thread(self.system_log, "[STATUS] Disconnected.")
+
+    def _heartbeat_worker(self) -> None:
+        while not self._stop_event.is_set():
+            time.sleep(1.0)
+            try:
+                with self._sock_lock:
+                    if self._sock is not None:
+                        self._sock.sendall(b"__heartbeat__\n")
+            except Exception:
+                pass
 
     def _handle_server_line(self, line: str) -> None:
         if not line:

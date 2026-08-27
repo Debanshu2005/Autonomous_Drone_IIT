@@ -4,11 +4,17 @@ Thread-safe terminal output helpers for the mission controller using Textual.
 from __future__ import annotations
 
 import asyncio
+import sys
+from pathlib import Path
 from typing import Callable, Optional
 
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import Input, RichLog, Static
+
+ONBOARD_EDGE_DIR = Path(__file__).resolve().parents[1] / "onboard_edge"
+if str(ONBOARD_EDGE_DIR) not in sys.path:
+    sys.path.insert(0, str(ONBOARD_EDGE_DIR))
 
 from sensor_check import NavigationMode, SensorDiscovery, SensorReport
 
@@ -77,7 +83,7 @@ class DroneDashboardApp(App[None]):
             bat_color = "red" if (report.battery.voltage_v and report.battery.voltage_v < 10.5) else "green"
             bat_text = f"[{bat_color}]BAT: {battery_pct}% ({voltage}V)[/{bat_color}]"
             
-            armed_marker = "🟢 ARMED" if report.armed else "🔴 DISARMED"
+            armed_marker = "ARMED" if report.armed else "DISARMED"
             
             altitude = -report.local_position.down_m if report.local_position.valid else 0.0
             nav = "GPS" if report.mode == NavigationMode.MODE_A_GPS else ("FLOW" if report.mode == NavigationMode.MODE_B_LOCAL else "NONE")

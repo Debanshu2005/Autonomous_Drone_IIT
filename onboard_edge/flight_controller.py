@@ -166,6 +166,7 @@ class FlightController:
 
             for index, task in enumerate(tasks, start=1):
                 await self._raise_if_failsafe()
+                report = self.sensors.snapshot()
                 plan = build_plan(task, report)
                 self._emit(
                     "STATUS",
@@ -207,6 +208,10 @@ class FlightController:
         self._emit("STATUS", f"Mode changed to {mode_name}.")
 
     async def _execute_queue_task(self, task: ParsedTask, plan: TrajectoryPlan) -> None:
+        if task.action == TaskAction.SET_MODE:
+            mode_name = task.notes[0].removeprefix("mode=") if task.notes else ""
+            await self.change_mode(mode_name)
+            return
         if task.action == TaskAction.TAKEOFF:
             await self._arm_and_takeoff(plan.target_altitude_m)
             return
@@ -313,14 +318,20 @@ class FlightController:
         await asyncio.sleep(self.config.post_takeoff_settle_s)
 
     async def _wait_until_altitude(self, target_altitude_m: float) -> None:
+        interval_s = 1.0 / max(1.0, self.config.setpoint_rate_hz)
         deadline = time.monotonic() + max(30.0, self.config.waypoint_timeout_s)
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
             local = self._current_local_position()
             if local is not None:
-                _, _, down_m = local
+                north_m, east_m, down_m = local
                 current_alt_m = -down_m
                 error_m = abs(target_altitude_m - current_alt_m)
+                self.mavlink.send_local_position_target(
+                    north_m,
+                    east_m,
+                    -target_altitude_m,
+                )
                 self._emit(
                     "EXEC",
                     f"Executing TAKEOFF to {target_altitude_m:.1f}m | "
@@ -329,7 +340,7 @@ class FlightController:
                 if error_m <= 0.2:
                     self._emit("STATUS", "Takeoff altitude reached.")
                     return
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(interval_s)
         raise FlightAbort(f"takeoff altitude {target_altitude_m:.1f}m was not reached")
 
     async def _hold_for(self, duration_s: float) -> None:
@@ -337,21 +348,19 @@ class FlightController:
         if duration_s <= 0:
             return
         LOGGER.info("Hovering for %.1fs", duration_s)
-        
-        # 1. SEND EXACTLY ONCE
+
+        interval_s = 1.0 / max(1.0, self.config.setpoint_rate_hz)
         hold_position = self._current_local_position()
-        if hold_position is not None:
-            self.mavlink.send_local_position_target(*hold_position)
-        else:
-            self.mavlink.send_body_velocity_target(0.0, 0.0, 0.0)
-            
-        # 2. PASSIVE MONITORING LOOP
         deadline = time.monotonic() + duration_s
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
+            if hold_position is not None:
+                self.mavlink.send_local_position_target(*hold_position)
+            else:
+                self.mavlink.send_body_velocity_target(0.0, 0.0, 0.0)
             remaining_s = max(0.0, deadline - time.monotonic())
             self._emit("EXEC", f"Executing HOVER | Time remaining: {remaining_s:.1f}s")
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(interval_s)
 
     async def _fly_local_target(self, target: LocalTarget) -> None:
         LOGGER.info(
@@ -382,7 +391,7 @@ class FlightController:
                 )
                 if distance <= max(0.2, self.config.waypoint_acceptance_radius_m):
                     if target.hold_s > 0:
-                        await asyncio.sleep(target.hold_s)
+                        await self._hold_for(target.hold_s)
                     return
             await asyncio.sleep(interval_s)
         raise FlightAbort(f"local waypoint {target.name} timed out")
@@ -418,7 +427,7 @@ class FlightController:
                 )
                 if max(horizontal_error, vertical_error) <= max(0.2, self.config.waypoint_acceptance_radius_m):
                     if target.hold_s > 0:
-                        await asyncio.sleep(target.hold_s)
+                        await self._hold_for(target.hold_s)
                     return
             await asyncio.sleep(interval_s)
         raise FlightAbort(f"global waypoint {target.name} timed out")
