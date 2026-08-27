@@ -41,7 +41,7 @@ from trajectory_engine import (
     command_guide,
     parse_task_sequence,
 )
-from terminal_ui import RichDashboard
+from terminal_ui import DroneDashboardApp
 
 
 LOGGER = logging.getLogger("mission_controller")
@@ -70,7 +70,7 @@ class MissionRepl:
         sensors: SensorDiscovery,
         controller: FlightController,
         config: CliConfig,
-        dashboard: RichDashboard,
+        dashboard: DroneDashboardApp,
     ) -> None:
         self.mavlink = mavlink
         self.sensors = sensors
@@ -87,15 +87,13 @@ class MissionRepl:
 
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
-        self.dashboard.start(self._loop)
         self._worker_thread.start()
-        self.dashboard.log("[STATUS] Autonomous terminal mission controller ready. Type 'help' for commands.")
+        self.dashboard.system_log("[STATUS] Autonomous terminal mission controller ready. Type 'help' for commands.")
         try:
             while not self._stop.is_set():
                 line = await self.dashboard.get_command_async()
                 await self._handle_line(line)
         finally:
-            self.dashboard.stop()
             self._worker_stop.set()
             self._flush_queue()
             if self._active_future and not self._active_future.done():
@@ -108,6 +106,8 @@ class MissionRepl:
 
     async def stop(self) -> None:
         self._stop.set()
+        # Ensure the queue gets unblocked
+        self.dashboard._cmd_queue.put_nowait("")
 
     async def _handle_line(self, line: str) -> None:
         command = line.strip()
@@ -121,27 +121,27 @@ class MissionRepl:
             return
         if command.lower().removeprefix("[cmd]").strip() == "status":
             report = await self.sensors.probe(wait_s=1.0)
-            self.dashboard.log(f"[STATUS] {format_sensor_report(report)}")
+            self.dashboard.system_log(f"[STATUS] {format_sensor_report(report)}")
             for reason in report.reasons:
-                self.dashboard.log(f"[STATUS] {reason}")
+                self.dashboard.system_log(f"[STATUS] {reason}")
             return
 
         try:
             sequence = parse_task_sequence(command, default_altitude_m=self.config.default_altitude_m)
         except ValueError as exc:
-            self.dashboard.log(f"[STATUS] Command parse error: {exc}")
-            self.dashboard.log(command_guide())
+            self.dashboard.system_log(f"[STATUS] Command parse error: {exc}")
+            self.dashboard.system_log(command_guide())
             return
 
         names = ", ".join(sequence.action_names)
-        self.dashboard.log(
+        self.dashboard.system_log(
             f"[STATUS] Parsing command: Queued {len(sequence.tasks)} tasks ({names})."
         )
         for note in sequence.notes:
-            self.dashboard.log(f"[STATUS] Parser note: {note}")
+            self.dashboard.system_log(f"[STATUS] Parser note: {note}")
 
         if self._is_interrupt(sequence):
-            self.dashboard.log("[STATUS] High-priority interrupt received. Flushing task queue.")
+            self.dashboard.system_log("[STATUS] High-priority interrupt received. Flushing task queue.")
             self._flush_queue()
             if self._active_future and not self._active_future.done():
                 self._active_future.cancel()
@@ -154,16 +154,16 @@ class MissionRepl:
             if sequence is None:
                 return
             if self._loop is None:
-                self.dashboard.log("[STATUS] Worker loop is not ready.")
+                self.dashboard.system_log("[STATUS] Worker loop is not ready.")
                 continue
             future = asyncio.run_coroutine_threadsafe(self._execute_sequence(sequence), self._loop)
             self._active_future = future
             try:
                 future.result()
             except concurrent.futures.CancelledError:
-                self.dashboard.log("[STATUS] Active sequence cancelled.")
+                self.dashboard.system_log("[STATUS] Active sequence cancelled.")
             except Exception as exc:
-                self.dashboard.log(f"[STATUS] Sequence failed: {exc}")
+                self.dashboard.system_log(f"[STATUS] Sequence failed: {exc}")
             finally:
                 if self._active_future is future:
                     self._active_future = None
@@ -175,13 +175,13 @@ class MissionRepl:
                 lambda task, report: build_trajectory(task, report, self._origin_from_report(report)),
             )
         except (FlightAbort, MavlinkError) as exc:
-            self.dashboard.log(f"[STATUS] Task aborted: {exc}")
+            self.dashboard.system_log(f"[STATUS] Task aborted: {exc}")
         except asyncio.CancelledError:
-            self.dashboard.log("[STATUS] Sequence cancellation acknowledged.")
+            self.dashboard.system_log("[STATUS] Sequence cancellation acknowledged.")
             raise
         except Exception as exc:
             LOGGER.exception("Unexpected task failure")
-            self.dashboard.log(f"[STATUS] Unexpected task failure: {exc}")
+            self.dashboard.system_log(f"[STATUS] Unexpected task failure: {exc}")
 
     def _flush_queue(self) -> None:
         while True:
@@ -206,21 +206,21 @@ class MissionRepl:
             if task.action in {TaskAction.HOVER, TaskAction.HOLD, TaskAction.LAND, TaskAction.RTL}:
                 continue
             plan = build_trajectory(task, report, self._origin_from_report(report))
-            self.dashboard.log(f"[STATUS] Sensor mode: {report.mode.value}")
-            self.dashboard.log(f"[STATUS] Plan: {plan.description}")
-            self.dashboard.log(f"[STATUS] Frame: {plan.frame.value}")
-            self.dashboard.log(f"[STATUS] Targets: {plan.count}")
+            self.dashboard.system_log(f"[STATUS] Sensor mode: {report.mode.value}")
+            self.dashboard.system_log(f"[STATUS] Plan: {plan.description}")
+            self.dashboard.system_log(f"[STATUS] Frame: {plan.frame.value}")
+            self.dashboard.system_log(f"[STATUS] Targets: {plan.count}")
             if plan.local_targets:
                 first = plan.local_targets[0]
                 last = plan.local_targets[-1]
-                self.dashboard.log(
+                self.dashboard.system_log(
                     "[STATUS] Local NED preview: "
                     f"first=({first.north_m:.1f},{first.east_m:.1f},{first.down_m:.1f}) "
                     f"last=({last.north_m:.1f},{last.east_m:.1f},{last.down_m:.1f})"
                 )
             if plan.global_targets:
                 first_global = plan.global_targets[0]
-                self.dashboard.log(
+                self.dashboard.system_log(
                     "[STATUS] Global preview: "
                     f"lat={first_global.lat_deg:.7f} lon={first_global.lon_deg:.7f} "
                     f"alt={first_global.relative_alt_m:.1f}m"
@@ -256,7 +256,7 @@ class MissionRepl:
         )
 
     def _print_help(self) -> None:
-        self.dashboard.log(command_guide())
+        self.dashboard.system_log(command_guide())
 
 
 async def amain() -> int:
@@ -308,7 +308,7 @@ async def amain() -> int:
     sensors = SensorDiscovery(mavlink, thresholds)
     await sensors.request_required_messages()
 
-    dashboard = RichDashboard(sensors, prompt="[CMD] > ", rate_hz=config.telemetry_rate_hz)
+    dashboard = DroneDashboardApp(sensors, prompt="[CMD] > ", rate_hz=config.telemetry_rate_hz)
 
     controller = FlightController(
         mavlink,
@@ -323,7 +323,7 @@ async def amain() -> int:
             max_altitude_m=config.max_altitude_m,
             final_action=config.final_action,
         ),
-        status_sink=dashboard.log,
+        status_sink=dashboard.system_log,
     )
     dashboard.controller_state = lambda: controller.state.value
     repl = MissionRepl(mavlink, sensors, controller, config, dashboard)
@@ -332,9 +332,12 @@ async def amain() -> int:
     safety_monitor = SafetyMonitor(repl, min_battery_voltage_v=config.critical_battery_voltage_v or 10.5)
     safety_monitor.start()
 
+    repl_task = asyncio.create_task(repl.run())
     try:
-        await repl.run()
+        await dashboard.run_async()
     finally:
+        await repl.stop()
+        await repl_task
         safety_monitor.stop()
         await mavlink.close()
     return 0
