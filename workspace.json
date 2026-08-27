@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-27T11:48:40.401Z",
-  "generatedAtEpochMs": 1787831320401,
+  "generatedAt": "2026-08-27T15:26:33.218Z",
+  "generatedAtEpochMs": 1787844393218,
   "generator": {
     "name": "Code Janitor",
     "feature": "workspace-memory"
@@ -14,7 +14,7 @@
   "workspace": {
     "name": "Autonomous_Drone_IIT",
     "root": "d:\\CityGrid\\my-project\\Autonomous_Drone_IIT",
-    "activeFile": "src/trajectory_engine.py",
+    "activeFile": "onboard_edge/trajectory_engine.py",
     "refreshReason": "startup",
     "outputFiles": {
       "markdown": "graphify-out/WORKSPACE_MEMORY.md",
@@ -22,16 +22,17 @@
       "structuredManifest": "workspace.json"
     },
     "suggestedStartingPoints": [
-      "src/trajectory_engine.py",
+      "onboard_edge/trajectory_engine.py",
       "requirements.txt",
+      "src/trajectory_engine.py",
       ".gitignore",
       "README.md"
     ],
     "stats": {
-      "totalFiles": 18,
+      "totalFiles": 23,
       "topLevelAreas": [
         {
-          "name": "src",
+          "name": "onboard_edge",
           "count": 7
         },
         {
@@ -39,7 +40,15 @@
           "count": 6
         },
         {
+          "name": "ground_station",
+          "count": 3
+        },
+        {
           "name": "scripts",
+          "count": 2
+        },
+        {
+          "name": "tests",
           "count": 2
         },
         {
@@ -58,10 +67,14 @@
       "primaryFileTypes": [
         {
           "name": ".py",
-          "count": 8
+          "count": 11
         },
         {
           "name": ".md",
+          "count": 3
+        },
+        {
+          "name": ".txt",
           "count": 3
         },
         {
@@ -78,10 +91,6 @@
         },
         {
           "name": ".sh",
-          "count": 1
-        },
-        {
-          "name": ".txt",
           "count": 1
         }
       ],
@@ -109,6 +118,24 @@
           "isKeyFile": false
         },
         {
+          "path": "ground_station/laptop_client.py",
+          "topLevelArea": "ground_station",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
+          "path": "ground_station/requirements.txt",
+          "topLevelArea": "ground_station",
+          "extension": ".txt",
+          "isKeyFile": false
+        },
+        {
+          "path": "ground_station/terminal_ui.py",
+          "topLevelArea": "ground_station",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
           "path": "legacy/autonomous_mission.py",
           "topLevelArea": "legacy",
           "extension": ".py",
@@ -118,6 +145,48 @@
           "path": "missions/example_mission.json",
           "topLevelArea": "missions",
           "extension": ".json",
+          "isKeyFile": false
+        },
+        {
+          "path": "onboard_edge/flight_controller.py",
+          "topLevelArea": "onboard_edge",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
+          "path": "onboard_edge/mavlink_io.py",
+          "topLevelArea": "onboard_edge",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
+          "path": "onboard_edge/pi_edge_brain.py",
+          "topLevelArea": "onboard_edge",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
+          "path": "onboard_edge/requirements.txt",
+          "topLevelArea": "onboard_edge",
+          "extension": ".txt",
+          "isKeyFile": false
+        },
+        {
+          "path": "onboard_edge/safety.py",
+          "topLevelArea": "onboard_edge",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
+          "path": "onboard_edge/sensor_check.py",
+          "topLevelArea": "onboard_edge",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
+          "path": "onboard_edge/trajectory_engine.py",
+          "topLevelArea": "onboard_edge",
+          "extension": ".py",
           "isKeyFile": false
         },
         {
@@ -145,44 +214,14 @@
           "isKeyFile": false
         },
         {
-          "path": "src/flight_controller.py",
-          "topLevelArea": "src",
+          "path": "tests/test_ground_station.py",
+          "topLevelArea": "tests",
           "extension": ".py",
           "isKeyFile": false
         },
         {
-          "path": "src/main.py",
-          "topLevelArea": "src",
-          "extension": ".py",
-          "isKeyFile": false
-        },
-        {
-          "path": "src/mavlink_io.py",
-          "topLevelArea": "src",
-          "extension": ".py",
-          "isKeyFile": false
-        },
-        {
-          "path": "src/safety.py",
-          "topLevelArea": "src",
-          "extension": ".py",
-          "isKeyFile": false
-        },
-        {
-          "path": "src/sensor_check.py",
-          "topLevelArea": "src",
-          "extension": ".py",
-          "isKeyFile": false
-        },
-        {
-          "path": "src/terminal_ui.py",
-          "topLevelArea": "src",
-          "extension": ".py",
-          "isKeyFile": false
-        },
-        {
-          "path": "src/trajectory_engine.py",
-          "topLevelArea": "src",
+          "path": "tests/test_trajectory_engine.py",
+          "topLevelArea": "tests",
           "extension": ".py",
           "isKeyFile": false
         },
@@ -306,15 +345,19 @@
   "git": {
     "available": true,
     "branch": "master",
-    "headSummary": "2026-08-27 dea1978 feat: implement asynchronous swarm mission controller with MAVLink I/O, trajectory engine, and terminal dashboard",
-    "statusSummary": "",
-    "changedFileCount": 0,
-    "statusLines": [],
+    "headSummary": "2026-08-27 8a6b6b7 feat: implement drone ground station, trajectory engine, and deployment scripts for autonomous flight control",
+    "statusSummary": "3 modifieds",
+    "changedFileCount": 3,
+    "statusLines": [
+      "M onboard_edge/flight_controller.py",
+      "M onboard_edge/mavlink_io.py",
+      "M onboard_edge/sensor_check.py"
+    ],
     "error": ""
   },
   "github": {
     "available": true,
-    "summary": "GitHub Repository: Debanshu2005/Autonomous_Drone_IIT\nDescription: IIT internship autonomous drone\nVisibility: public | Default branch: master\nStars: 0 | Forks: 0 | Open issues: 0\n\nLatest commit on master:\n- dea1978 by Debanshu2005 on 2026-08-27\n  feat: implement asynchronous swarm mission controller with MAVLink I/O, trajectory engine, and terminal dashboard\n\nURL: https://github.com/Debanshu2005/Autonomous_Drone_IIT"
+    "summary": "GitHub Repository: Debanshu2005/Autonomous_Drone_IIT\nDescription: IIT internship autonomous drone\nVisibility: public | Default branch: master\nStars: 0 | Forks: 0 | Open issues: 0\n\nLatest commit on master:\n- 8a6b6b7 by Debanshu2005 on 2026-08-27\n  feat: implement drone ground station, trajectory engine, and deployment scripts for autonomous flight control\n\nURL: https://github.com/Debanshu2005/Autonomous_Drone_IIT"
   },
   "graphify": {
     "reportAvailable": false,

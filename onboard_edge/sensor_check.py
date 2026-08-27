@@ -125,6 +125,7 @@ class SensorDiscovery:
             "SYS_STATUS": 2.0,
             "BATTERY_STATUS": 1.0,
             "GPS_RAW_INT": 2.0,
+            "GLOBAL_POSITION_INT": 5.0,
             "EKF_STATUS_REPORT": 2.0,
             "LOCAL_POSITION_NED": 10.0,
             "OPTICAL_FLOW": 5.0,

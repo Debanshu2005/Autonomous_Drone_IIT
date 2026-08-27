@@ -1,6 +1,6 @@
 # Workspace Memory
 This file is maintained automatically by Code Janitor so Claude, Codex, Bob, and any other AI agent can reuse repo context without rescanning everything from scratch.
-Generated: 2026-08-27T11:48:40.401Z
+Generated: 2026-08-27T15:26:33.218Z
 Workspace: Autonomous_Drone_IIT
 Workspace root: d:\CityGrid\my-project\Autonomous_Drone_IIT
 Refresh reason: startup
@@ -18,14 +18,14 @@ Structured manifest: workspace.json
 - Graphify graph: not available yet
 - Last activity: 2026-08-27T11:07:38.271Z
 ## Workspace Focus
-- Active file in focus: src/trajectory_engine.py
+- Active file in focus: onboard_edge/trajectory_engine.py
 - Hottest files right now: requirements.txt (1), src/trajectory_engine.py (1)
-- Suggested starting points: src/trajectory_engine.py, requirements.txt, .gitignore, README.md
+- Suggested starting points: onboard_edge/trajectory_engine.py, requirements.txt, src/trajectory_engine.py, .gitignore, README.md
 ## Current Workspace
-- Active file: src/trajectory_engine.py
-- Tracked files in snapshot: 18
-- Top-level areas: src (7), [root] (6), scripts (2), docs (1), legacy (1), missions (1)
-- Primary file types: .py (8), .md (3), .json (2), [no extension] (2), .ps1 (1), .sh (1), .txt (1)
+- Active file: onboard_edge/trajectory_engine.py
+- Tracked files in snapshot: 23
+- Top-level areas: onboard_edge (7), [root] (6), ground_station (3), scripts (2), tests (2), docs (1), legacy (1), missions (1)
+- Primary file types: .py (11), .md (3), .txt (3), .json (2), [no extension] (2), .ps1 (1), .sh (1)
 - Key files: .gitignore, README.md
 ## Package Snapshot
 - Package metadata unavailable: package.json was not found.
@@ -33,7 +33,7 @@ Structured manifest: workspace.json
 - Logged change events: 2
 - Change mix: save (2)
 - Remembered file snapshots: 2
-- Working tree summary: clean
+- Working tree summary: 3 modifieds
 ## Tracked Snapshots
 - src/trajectory_engine.py | 676 lines | 23042 chars | hash dd0e86f684b0
   Last snapshot: 2026-08-27T11:07:38.271Z
@@ -61,9 +61,11 @@ Structured manifest: workspace.json
 
 ## Git Snapshot
 - Branch: master
-- HEAD: 2026-08-27 dea1978 feat: implement asynchronous swarm mission controller with MAVLink I/O, trajectory engine, and terminal dashboard
-- Working tree summary: clean
-- Working tree: clean
+- HEAD: 2026-08-27 8a6b6b7 feat: implement drone ground station, trajectory engine, and deployment scripts for autonomous flight control
+- Working tree summary: 3 modifieds
+- M onboard_edge/flight_controller.py
+- M onboard_edge/mavlink_io.py
+- M onboard_edge/sensor_check.py
 
 ## GitHub Snapshot
 GitHub Repository: Debanshu2005/Autonomous_Drone_IIT
@@ -72,8 +74,8 @@ Visibility: public | Default branch: master
 Stars: 0 | Forks: 0 | Open issues: 0
 
 Latest commit on master:
-- dea1978 by Debanshu2005 on 2026-08-27
-  feat: implement asynchronous swarm mission controller with MAVLink I/O, trajectory engine, and terminal dashboard
+- 8a6b6b7 by Debanshu2005 on 2026-08-27
+  feat: implement drone ground station, trajectory engine, and deployment scripts for autonomous flight control
 
 URL: https://github.com/Debanshu2005/Autonomous_Drone_IIT
 

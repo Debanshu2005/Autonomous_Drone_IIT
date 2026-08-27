@@ -342,7 +342,9 @@ class MavlinkConnection:
             mavutil.mavlink.MAV_RESULT_ACCEPTED,
             mavutil.mavlink.MAV_RESULT_IN_PROGRESS,
         ):
-            raise MavlinkError(f"command {command} rejected with MAV_RESULT {result}")
+            raise MavlinkError(
+                f"command {command} rejected with {mavlink_result_name(result)} ({result})"
+            )
         return ack
 
     async def set_mode(self, mode_name: str, timeout_s: float = 8.0) -> None:
@@ -389,10 +391,16 @@ class MavlinkConnection:
             timeout_s=8.0,
         )
 
-    async def takeoff(self, altitude_m: float) -> None:
+    async def takeoff(
+        self,
+        altitude_m: float,
+        *,
+        lat_deg: float = 0.0,
+        lon_deg: float = 0.0,
+    ) -> None:
         await self.command_long(
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-            (0, 0, 0, float("nan"), 0, 0, altitude_m),
+            (0, 0, 0, float("nan"), lat_deg, lon_deg, altitude_m),
             timeout_s=10.0,
         )
 
@@ -493,6 +501,43 @@ class MavlinkConnection:
             0,
         )
 
+    def send_local_velocity_target(
+        self,
+        vx_m_s: float,
+        vy_m_s: float,
+        vz_m_s: float,
+        *,
+        yaw_rate_rad_s: float = 0.0,
+    ) -> None:
+        type_mask = (
+            mavutil.mavlink.POSITION_TARGET_TYPEMASK_X_IGNORE
+            | mavutil.mavlink.POSITION_TARGET_TYPEMASK_Y_IGNORE
+            | mavutil.mavlink.POSITION_TARGET_TYPEMASK_Z_IGNORE
+            | mavutil.mavlink.POSITION_TARGET_TYPEMASK_AX_IGNORE
+            | mavutil.mavlink.POSITION_TARGET_TYPEMASK_AY_IGNORE
+            | mavutil.mavlink.POSITION_TARGET_TYPEMASK_AZ_IGNORE
+            | mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_IGNORE
+            | mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE
+        )
+        self.master.mav.set_position_target_local_ned_send(
+            int(time.monotonic() * 1000) & 0xFFFFFFFF,
+            self.target_system,
+            self.target_component,
+            mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+            type_mask,
+            0,
+            0,
+            0,
+            vx_m_s,
+            vy_m_s,
+            vz_m_s,
+            0,
+            0,
+            0,
+            0,
+            yaw_rate_rad_s,
+        )
+
     def send_body_velocity_target(
         self,
         vx_m_s: float,
@@ -568,3 +613,10 @@ class SwarmManager:
     async def close_all(self) -> None:
         import asyncio
         await asyncio.gather(*[conn.close() for conn in self.connections.values()])
+
+
+def mavlink_result_name(result: int) -> str:
+    for key, enum_entry in mavutil.mavlink.enums.get("MAV_RESULT", {}).items():
+        if int(key) == int(result):
+            return enum_entry.name
+    return "MAV_RESULT_UNKNOWN"

@@ -62,7 +62,16 @@ class FlightControllerConfig:
     rc_abort_channel: int = 7
     rc_abort_pwm: int = 1800
     post_takeoff_settle_s: float = 2.0
+    takeoff_start_timeout_s: float = 8.0
+    takeoff_min_climb_m: float = 0.3
+    takeoff_velocity_fallback_m_s: float = 0.6
     final_action: str = "hold"
+
+
+@dataclass(frozen=True)
+class AltitudeSample:
+    relative_alt_m: float
+    source: str
 
 
 class FlightController:
@@ -286,6 +295,7 @@ class FlightController:
                 if mode_name == "OFFBOARD":
                     await self._prestream_offboard_setpoints()
                 await self.mavlink.set_mode(mode_name)
+                self._emit("STATUS", f"Autopilot mode confirmed: {mode_name}.")
                 return
             except Exception as exc:
                 last_error = exc
@@ -305,37 +315,155 @@ class FlightController:
         if not self._vehicle_armed():
             self._emit("STATUS", "Arming vehicle.")
             LOGGER.info("Arming vehicle")
-            await self.mavlink.arm()
+            try:
+                await self.mavlink.arm()
+            except MavlinkError as exc:
+                raise FlightAbort(
+                    f"arm command failed: {exc}; check Mission Planner Messages for pre-arm failures"
+                ) from exc
+            await self._wait_until_armed()
 
         self.state = FlightState.TAKEOFF
         self._emit("STATUS", f"Taking off to {target_altitude_m:.1f}m.")
         LOGGER.info("Taking off to %.1fm AGL", target_altitude_m)
+        mode_name = self._current_mode_name()
+        if mode_name in {"GUIDED_NOGPS", "OFFBOARD"}:
+            raise FlightAbort(
+                f"autonomous takeoff is not supported in {mode_name}; switch to GUIDED with a healthy EKF/GPS "
+                "or take off manually before sending local movement commands"
+            )
+        global_position = self._current_global_position(allow_gps_fallback=False)
+        lat_deg = global_position[0] if global_position else 0.0
+        lon_deg = global_position[1] if global_position else 0.0
+        accepted = False
         try:
-            await self.mavlink.takeoff(target_altitude_m)
-        except MavlinkError:
-            LOGGER.warning("NAV_TAKEOFF was not acknowledged; climbing with local NED setpoints")
+            await self.mavlink.takeoff(target_altitude_m, lat_deg=lat_deg, lon_deg=lon_deg)
+            accepted = True
+            self._emit("STATUS", "NAV_TAKEOFF accepted by autopilot.")
+        except MavlinkError as exc:
+            message = str(exc)
+            if "rejected" in message:
+                raise FlightAbort(
+                    f"NAV_TAKEOFF rejected by autopilot: {message}; check mode, arming state, and Mission Planner Messages"
+                ) from exc
+            LOGGER.warning("NAV_TAKEOFF was not acknowledged; probing guided climb: %s", exc)
+            self._emit("STATUS", f"NAV_TAKEOFF ACK timeout; probing guided climb ({exc}).")
+        if accepted:
+            try:
+                await self._wait_for_takeoff_start(target_altitude_m)
+            except FlightAbort as exc:
+                LOGGER.warning("NAV_TAKEOFF did not start a climb: %s", exc)
+                self._emit("STATUS", "NAV_TAKEOFF did not start climb; trying guided vertical velocity.")
+                await self._probe_guided_velocity_climb(target_altitude_m)
+        else:
+            await self._probe_guided_velocity_climb(target_altitude_m)
         await self._wait_until_altitude(target_altitude_m)
         await asyncio.sleep(self.config.post_takeoff_settle_s)
+
+    async def _wait_until_armed(self, timeout_s: float = 8.0) -> None:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self._vehicle_armed():
+                self._emit("STATUS", "Vehicle armed confirmed.")
+                return
+            await asyncio.sleep(0.1)
+        raise FlightAbort(
+            "arm command was acknowledged but the vehicle never reported ARMED; "
+            "check Mission Planner Messages for pre-arm failures"
+        )
+
+    async def _wait_for_takeoff_start(self, target_altitude_m: float) -> None:
+        baseline = self._current_altitude_sample()
+        baseline_alt_m = baseline.relative_alt_m if baseline else 0.0
+        climb_required_m = min(
+            self.config.takeoff_min_climb_m,
+            max(0.1, target_altitude_m * 0.5),
+        )
+        deadline = time.monotonic() + self.config.takeoff_start_timeout_s
+        while time.monotonic() < deadline:
+            await self._raise_if_failsafe()
+            if not self._vehicle_armed():
+                raise FlightAbort(
+                    "vehicle disarmed during takeoff; check Mission Planner Messages for failsafe/pre-arm details"
+                )
+            sample = self._current_altitude_sample()
+            if sample is not None:
+                climbed_m = sample.relative_alt_m - baseline_alt_m
+                self._emit(
+                    "EXEC",
+                    f"Starting TAKEOFF | Current Alt: {sample.relative_alt_m:.1f}m "
+                    f"({sample.source}) | Climb: {climbed_m:.1f}m",
+                )
+                if sample.relative_alt_m >= target_altitude_m - 0.2 or climbed_m >= climb_required_m:
+                    return
+            await asyncio.sleep(0.2)
+        raise FlightAbort(
+            f"takeoff command accepted but altitude did not increase within "
+            f"{self.config.takeoff_start_timeout_s:.1f}s"
+        )
+
+    async def _probe_guided_velocity_climb(self, target_altitude_m: float) -> None:
+        baseline = self._current_altitude_sample()
+        baseline_alt_m = baseline.relative_alt_m if baseline else 0.0
+        climb_required_m = min(
+            self.config.takeoff_min_climb_m,
+            max(0.1, target_altitude_m * 0.5),
+        )
+        deadline = time.monotonic() + self.config.takeoff_start_timeout_s
+        interval_s = 1.0 / max(1.0, self.config.setpoint_rate_hz)
+        while time.monotonic() < deadline:
+            await self._raise_if_failsafe()
+            if not self._vehicle_armed():
+                raise FlightAbort(
+                    "vehicle disarmed during guided climb probe; check Mission Planner Messages"
+                )
+            self.mavlink.send_local_velocity_target(
+                0.0,
+                0.0,
+                -abs(self.config.takeoff_velocity_fallback_m_s),
+            )
+            sample = self._current_altitude_sample()
+            if sample is not None:
+                climbed_m = sample.relative_alt_m - baseline_alt_m
+                self._emit(
+                    "EXEC",
+                    f"Probing TAKEOFF climb | Current Alt: {sample.relative_alt_m:.1f}m "
+                    f"({sample.source}) | Climb: {climbed_m:.1f}m",
+                )
+                if sample.relative_alt_m >= target_altitude_m - 0.2 or climbed_m >= climb_required_m:
+                    return
+            await asyncio.sleep(interval_s)
+        raise FlightAbort(
+            "takeoff did not start climbing; confirm props/motors, safety switch, GUIDED mode, "
+            "EKF/home position, and Mission Planner pre-arm/messages"
+        )
 
     async def _wait_until_altitude(self, target_altitude_m: float) -> None:
         interval_s = 1.0 / max(1.0, self.config.setpoint_rate_hz)
         deadline = time.monotonic() + max(30.0, self.config.waypoint_timeout_s)
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
-            local = self._current_local_position()
-            if local is not None:
-                north_m, east_m, down_m = local
-                current_alt_m = -down_m
-                error_m = abs(target_altitude_m - current_alt_m)
-                self.mavlink.send_local_position_target(
-                    north_m,
-                    east_m,
-                    -target_altitude_m,
+            if not self._vehicle_armed():
+                raise FlightAbort(
+                    "vehicle disarmed during takeoff; check Mission Planner Messages for failsafe/pre-arm details"
                 )
+            sample = self._current_altitude_sample()
+            current_alt_m = sample.relative_alt_m if sample is not None else None
+            local = self._current_local_position()
+            global_position = self._current_global_position(allow_gps_fallback=False)
+            if global_position is not None:
+                lat_deg, lon_deg, _relative_alt_m = global_position
+                self.mavlink.send_global_position_target(lat_deg, lon_deg, target_altitude_m)
+            elif local is not None:
+                north_m, east_m, _down_m = local
+                self.mavlink.send_local_position_target(north_m, east_m, -target_altitude_m)
+            if current_alt_m is not None:
+                error_m = abs(target_altitude_m - current_alt_m)
+                source = sample.source if sample is not None else "unknown"
                 self._emit(
                     "EXEC",
                     f"Executing TAKEOFF to {target_altitude_m:.1f}m | "
-                    f"Current Alt: {current_alt_m:.1f}m | Error: {error_m:.1f}m",
+                    f"Current Alt: {current_alt_m:.1f}m ({source}) | Error: {error_m:.1f}m",
                 )
                 if error_m <= 0.2:
                     self._emit("STATUS", "Takeoff altitude reached.")
@@ -507,6 +635,10 @@ class FlightController:
             & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
         )
 
+    def _current_mode_name(self) -> str:
+        heartbeat = self.mavlink.latest_message("HEARTBEAT")
+        return self.mavlink.mode_name_from_heartbeat(heartbeat) if heartbeat else "UNKNOWN"
+
     def _current_local_position(self) -> Optional[tuple[float, float, float]]:
         msg = self.mavlink.latest_message("LOCAL_POSITION_NED", 1.5)
         if msg is None:
@@ -519,9 +651,11 @@ class FlightController:
             return None
         return north_m, east_m, down_m
 
-    def _current_global_position(self) -> Optional[tuple[float, float, float]]:
+    def _current_global_position(self, *, allow_gps_fallback: bool = True) -> Optional[tuple[float, float, float]]:
         msg = self.mavlink.latest_message("GLOBAL_POSITION_INT", 2.0)
         if msg is None:
+            if not allow_gps_fallback:
+                return None
             gps = self.mavlink.latest_message("GPS_RAW_INT", 2.0)
             if gps is None:
                 return None
@@ -540,12 +674,21 @@ class FlightController:
         return lat, lon, relative_alt
 
     def _current_relative_altitude(self) -> Optional[float]:
-        local = self._current_local_position()
-        if local is not None:
-            return -local[2]
+        sample = self._current_altitude_sample()
+        return sample.relative_alt_m if sample else None
+
+    def _current_altitude_sample(self) -> Optional[AltitudeSample]:
         global_position = self.mavlink.latest_message("GLOBAL_POSITION_INT", 2.0)
         if global_position is not None:
-            return float(getattr(global_position, "relative_alt", 0)) / 1000.0
+            relative_alt_m = float(getattr(global_position, "relative_alt", 0)) / 1000.0
+            if math.isfinite(relative_alt_m):
+                return AltitudeSample(relative_alt_m, "GLOBAL_POSITION_INT")
+
+        local = self._current_local_position()
+        if local is not None:
+            relative_alt_m = -local[2]
+            if math.isfinite(relative_alt_m):
+                return AltitudeSample(relative_alt_m, "LOCAL_POSITION_NED")
         return None
 
 
