@@ -28,6 +28,10 @@ class TaskAction(str, Enum):
     CIRCLE = "circle"
     GOTO = "goto"
     SQUARE = "square"
+    TRIANGLE = "triangle"
+    SPIRAL = "spiral"
+    FIGURE_8 = "figure-8"
+    GRID = "grid"
     HOVER = "hover"
     SET_MODE = "set_mode"
     HOLD = "hold"
@@ -109,26 +113,50 @@ class TrajectoryPlan:
         return len(self.local_targets) if self.frame == TargetFrame.LOCAL_NED else len(self.global_targets)
 
 
-def parse_nlp_command(text: str) -> list[dict]:
+def _normalize_distance_m(value: float, unit: str) -> float:
+    unit = unit.lower()
+    if unit.startswith('c'):
+        return value * 0.01
+    elif unit.startswith('k'):
+        return value * 1000.0
+    return value
+
+def parse_mission(text: str) -> list[dict]:
     normalized = text.lower()
     
+    # 2. Regex Scanning
     has_takeoff = bool(re.search(r'\btakeoff\b|\btake-off\b|\btake off\b', normalized))
     has_hover = bool(re.search(r'\bhover\b', normalized))
     has_land = bool(re.search(r'\bland\b', normalized))
     has_rtl = bool(re.search(r'\brtl\b|\breturn\b', normalized))
     has_hold = bool(re.search(r'\bhold\b|\bloiter\b', normalized))
+    
+    shape_match = re.search(r'\b(circle|square|triangle|spiral|figure-8|grid)\b', normalized)
+    has_formation = bool(shape_match)
 
     tasks = []
     
+    # 4. Sequential Queue Generation
     if has_takeoff:
-        alt_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:m|meter|meters)\b', normalized)
-        takeoff_alt = float(alt_match.group(1)) if alt_match else 2.0
+        alt_match = re.search(r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters|kilometer|kilometers|centimeter|centimeters)\b', normalized)
+        takeoff_alt = _normalize_distance_m(float(alt_match.group(1)), alt_match.group(2)) if alt_match else 2.0
         tasks.append({'task': 'TAKEOFF', 'alt': takeoff_alt})
 
     if has_hover:
         time_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b', normalized)
         hover_s = float(time_match.group(1)) if time_match else 5.0
         tasks.append({'task': 'HOVER', 'time': hover_s})
+        
+    if has_formation:
+        shape_name = shape_match.group(1)
+        
+        scale_match = re.search(r'(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters|kilometer|kilometers|centimeter|centimeters)\b', normalized)
+        scale = _normalize_distance_m(float(scale_match.group(1)), scale_match.group(2)) if scale_match else 5.0
+        
+        duration_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b', normalized)
+        duration = float(duration_match.group(1)) if duration_match else 10.0
+        
+        tasks.append({'task': 'FORMATION', 'shape': shape_name, 'scale': scale, 'duration': duration})
         
     if has_hold:
         tasks.append({'task': 'HOLD'})
@@ -147,19 +175,30 @@ def parse_task_sequence(
     default_altitude_m: float = 3.0,
     default_hover_s: float = 2.0,
 ) -> TaskSequence:
-    dict_tasks = parse_nlp_command(text)
+    dict_tasks = parse_mission(text)
     if not dict_tasks:
         raise ValueError("no executable tasks found")
         
     tasks = []
     for d in dict_tasks:
         action_str = d['task']
-        action = TaskAction(action_str.lower())
         params = {}
-        if 'alt' in d:
-            params['h'] = d['alt']
-        if 'time' in d:
-            params['hover_s'] = d['time']
+        if action_str == 'FORMATION':
+            action = TaskAction(d['shape'].lower())
+            if 'scale' in d:
+                params['r'] = d['scale']
+                params['size'] = d['scale']
+            if 'duration' in d:
+                params['hover_s'] = d['duration']
+            if action == TaskAction.CIRCLE:
+                params['n'] = 36.0
+        else:
+            action = TaskAction(action_str.lower())
+            if 'alt' in d:
+                params['h'] = d['alt']
+            if 'time' in d:
+                params['hover_s'] = d['time']
+        
         tasks.append(ParsedTask(action, params, text))
         
     return TaskSequence(tasks, text)
