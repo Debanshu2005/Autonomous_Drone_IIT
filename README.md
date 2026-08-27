@@ -8,7 +8,9 @@ Pixhawk remains responsible for stabilization, motor output, RC override,
 EKF/GPS checks, battery failsafe, and landing execution.
 
 ## Interactive Dashboard
-![Textual Dashboard UI](docs/assets/dashboard.png)
+
+<img width="1268" height="1020" alt="image" src="https://github.com/user-attachments/assets/da5a3c2d-08e0-4bb4-a7c5-4757bfebd6bd" />
+
 
 Built using the `Textual` framework, the interactive terminal UI features a persistent 4Hz live telemetry header, a 500-line scrollable system log buffer with semantic color markup, and a native non-blocking command prompt with full arrow-key cursor support.
 
