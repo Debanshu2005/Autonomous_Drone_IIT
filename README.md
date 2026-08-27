@@ -7,6 +7,11 @@ The Pi sends high-level MAVLink setpoints and commands through MAVLink. The
 Pixhawk remains responsible for stabilization, motor output, RC override,
 EKF/GPS checks, battery failsafe, and landing execution.
 
+## Interactive Dashboard
+![Textual Dashboard UI](docs/assets/dashboard.png)
+
+Built using the `Textual` framework, the interactive terminal UI features a persistent 4Hz live telemetry header, a 500-line scrollable system log buffer with semantic color markup, and a native non-blocking command prompt with full arrow-key cursor support.
+
 ## What This Does
 
 - Waits for Pixhawk connection, estimator health, and battery telemetry.
