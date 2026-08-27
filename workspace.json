@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-27T11:07:46.379Z",
-  "generatedAtEpochMs": 1787828866379,
+  "generatedAt": "2026-08-27T11:48:40.401Z",
+  "generatedAtEpochMs": 1787831320401,
   "generator": {
     "name": "Code Janitor",
     "feature": "workspace-memory"
@@ -15,7 +15,7 @@
     "name": "Autonomous_Drone_IIT",
     "root": "d:\\CityGrid\\my-project\\Autonomous_Drone_IIT",
     "activeFile": "src/trajectory_engine.py",
-    "refreshReason": "tracked-change",
+    "refreshReason": "startup",
     "outputFiles": {
       "markdown": "graphify-out/WORKSPACE_MEMORY.md",
       "markdownMirror": "workspacememory.md",
@@ -306,25 +306,15 @@
   "git": {
     "available": true,
     "branch": "master",
-    "headSummary": "2026-08-27 dc99e20 feat: implement trajectory engine for parsing natural-language drone commands and generating mission waypoints",
-    "statusSummary": "9 modifieds",
-    "changedFileCount": 9,
-    "statusLines": [
-      "M graphify-out/WORKSPACE_MEMORY.md",
-      "M src/main.py",
-      "M src/mavlink_io.py",
-      "M src/safety.py",
-      "M src/sensor_check.py",
-      "M src/terminal_ui.py",
-      "M src/trajectory_engine.py",
-      "M workspace.json",
-      "M workspacememory.md"
-    ],
+    "headSummary": "2026-08-27 dea1978 feat: implement asynchronous swarm mission controller with MAVLink I/O, trajectory engine, and terminal dashboard",
+    "statusSummary": "",
+    "changedFileCount": 0,
+    "statusLines": [],
     "error": ""
   },
   "github": {
-    "available": false,
-    "summary": "GitHub API request failed with 404. Not Found Configure the GitHub token in SecretStorage or GITHUB_TOKEN if the repository is private or rate-limited."
+    "available": true,
+    "summary": "GitHub Repository: Debanshu2005/Autonomous_Drone_IIT\nDescription: IIT internship autonomous drone\nVisibility: public | Default branch: master\nStars: 0 | Forks: 0 | Open issues: 0\n\nLatest commit on master:\n- dea1978 by Debanshu2005 on 2026-08-27\n  feat: implement asynchronous swarm mission controller with MAVLink I/O, trajectory engine, and terminal dashboard\n\nURL: https://github.com/Debanshu2005/Autonomous_Drone_IIT"
   },
   "graphify": {
     "reportAvailable": false,

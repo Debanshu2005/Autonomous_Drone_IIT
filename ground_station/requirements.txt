@@ -1,0 +1,2 @@
+# Laptop Ground Station Dependencies
+# No external dependencies required. Uses only standard libraries (socket, threading, sys, time).

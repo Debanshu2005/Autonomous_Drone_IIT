@@ -1,9 +1,9 @@
 # Workspace Memory
 This file is maintained automatically by Code Janitor so Claude, Codex, Bob, and any other AI agent can reuse repo context without rescanning everything from scratch.
-Generated: 2026-08-27T11:07:46.379Z
+Generated: 2026-08-27T11:48:40.401Z
 Workspace: Autonomous_Drone_IIT
 Workspace root: d:\CityGrid\my-project\Autonomous_Drone_IIT
-Refresh reason: tracked-change
+Refresh reason: startup
 Output path: graphify-out/WORKSPACE_MEMORY.md
 Shared mirror: workspacememory.md
 Structured manifest: workspace.json
@@ -33,7 +33,7 @@ Structured manifest: workspace.json
 - Logged change events: 2
 - Change mix: save (2)
 - Remembered file snapshots: 2
-- Working tree summary: 9 modifieds
+- Working tree summary: clean
 ## Tracked Snapshots
 - src/trajectory_engine.py | 676 lines | 23042 chars | hash dd0e86f684b0
   Last snapshot: 2026-08-27T11:07:38.271Z
@@ -61,20 +61,21 @@ Structured manifest: workspace.json
 
 ## Git Snapshot
 - Branch: master
-- HEAD: 2026-08-27 dc99e20 feat: implement trajectory engine for parsing natural-language drone commands and generating mission waypoints
-- Working tree summary: 9 modifieds
-- M graphify-out/WORKSPACE_MEMORY.md
-- M src/main.py
-- M src/mavlink_io.py
-- M src/safety.py
-- M src/sensor_check.py
-- M src/terminal_ui.py
-- M src/trajectory_engine.py
-- M workspace.json
-- M workspacememory.md
+- HEAD: 2026-08-27 dea1978 feat: implement asynchronous swarm mission controller with MAVLink I/O, trajectory engine, and terminal dashboard
+- Working tree summary: clean
+- Working tree: clean
 
 ## GitHub Snapshot
-GitHub context unavailable: GitHub API request failed with 404. Not Found Configure the GitHub token in SecretStorage or GITHUB_TOKEN if the repository is private or rate-limited.
+GitHub Repository: Debanshu2005/Autonomous_Drone_IIT
+Description: IIT internship autonomous drone
+Visibility: public | Default branch: master
+Stars: 0 | Forks: 0 | Open issues: 0
+
+Latest commit on master:
+- dea1978 by Debanshu2005 on 2026-08-27
+  feat: implement asynchronous swarm mission controller with MAVLink I/O, trajectory engine, and terminal dashboard
+
+URL: https://github.com/Debanshu2005/Autonomous_Drone_IIT
 
 ## Graphify Snapshot
 Graphify report not found. Generate Graphify output if you want architecture-aware memory excerpts here.

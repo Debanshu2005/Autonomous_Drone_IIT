@@ -1,0 +1,5 @@
+pymavlink
+pyserial
+numpy
+onnxruntime
+vosk
