@@ -39,6 +39,7 @@ class TaskAction(str, Enum):
     RTL = "rtl"
     TAKEOFF = "takeoff"
     TAKEOFF_LAND = "takeoff_land"
+    MOVE_RELATIVE = "move_relative"
 
 
 class TargetFrame(str, Enum):
@@ -246,6 +247,11 @@ def parse_task_sequence(
             action = TaskAction.SET_MODE
             tasks.append(ParsedTask(action, {}, text, notes=(f"mode={d['mode']}",)))
             continue
+        elif action_str == 'MOVE_RELATIVE':
+            action = TaskAction.MOVE_RELATIVE
+            params['dn'] = d.get('dn', 0.0)
+            params['de'] = d.get('de', 0.0)
+            params['dd'] = d.get('dd', 0.0)
         elif action_str == 'GOTO':
             action = TaskAction.GOTO
             params['north'] = d.get('x', 0.0)
@@ -293,6 +299,15 @@ def build_trajectory(
     if task.action == TaskAction.CIRCLE:
         local_targets = _circle_targets(task, origin, altitude_m)
         description = f"circle radius={task.params['r']:.1f}m altitude={altitude_m:.1f}m"
+    elif task.action == TaskAction.MOVE_RELATIVE:
+        altitude_m = max(0.0, float(origin.relative_alt_m or 0.0) - task.params.get('dd', 0.0))
+        north = float(origin.local_north_m or 0.0) + task.params.get('dn', 0.0)
+        east = float(origin.local_east_m or 0.0) + task.params.get('de', 0.0)
+        local_targets = [LocalTarget(north, east)]
+        description = (
+            f"move relative north={task.params.get('dn', 0.0):.1f}m "
+            f"east={task.params.get('de', 0.0):.1f}m down={task.params.get('dd', 0.0):.1f}m"
+        )
     elif task.action == TaskAction.GOTO:
         local_targets = [_goto_target(task, origin, altitude_m)]
         description = (
@@ -649,3 +664,27 @@ def _positive(value: float, name: str) -> float:
     if not math.isfinite(value) or value <= 0:
         raise ValueError(f"{name} must be a positive finite number")
     return value
+
+
+def parse_swarm_target(text: str, active_sysids: list[int]) -> tuple[list[int], str]:
+    text = text.strip()
+    target_match = re.match(r"^(all|drone(\d+)|sysid:(\d+)):\s*(.*)", text, re.IGNORECASE)
+    if target_match:
+        prefix = target_match.group(1).lower()
+        remainder = target_match.group(4).strip()
+        if prefix == "all":
+            return active_sysids, remainder
+        elif prefix.startswith("drone"):
+            sysid = int(target_match.group(2))
+            if sysid in active_sysids:
+                return [sysid], remainder
+            return [], remainder
+        elif prefix.startswith("sysid:"):
+            sysid = int(target_match.group(3))
+            if sysid in active_sysids:
+                return [sysid], remainder
+            return [], remainder
+            
+    if not active_sysids:
+        return [], text
+    return [min(active_sysids)], text

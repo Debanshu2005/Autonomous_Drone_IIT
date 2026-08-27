@@ -22,7 +22,8 @@ class DroneDashboardApp(App[None]):
     }
     #header {
         dock: top;
-        height: 3;
+        height: auto;
+        padding: 1;
         background: $boost;
         content-align: center middle;
         border-bottom: solid $primary;
@@ -37,15 +38,15 @@ class DroneDashboardApp(App[None]):
 
     def __init__(
         self,
-        sensors: SensorDiscovery,
+        sensors_map: dict[int, SensorDiscovery],
         prompt: str = "[CMD] > ",
-        controller_state: Optional[Callable[[], str]] = None,
+        controller_state_map: dict[int, Callable[[], str]] = None,
         rate_hz: float = 4.0,
     ) -> None:
         super().__init__()
-        self.sensors = sensors
+        self.sensors_map = sensors_map
         self.cmd_prompt = prompt
-        self.controller_state = controller_state
+        self.controller_state_map = controller_state_map or {}
         self.rate_hz = rate_hz
         
         self._cmd_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -62,33 +63,38 @@ class DroneDashboardApp(App[None]):
         self.set_interval(1.0 / self.rate_hz, self.update_telemetry)
         self.input_widget.focus()
         
+    
     def _get_telemetry_markup(self) -> str:
-        report = self.sensors.snapshot()
-        
-        battery_pct = "NA"
-        if report.battery.remaining_percent is not None:
-            battery_pct = f"{report.battery.remaining_percent * 100:.0f}"
-        voltage = "NA" if report.battery.voltage_v is None else f"{report.battery.voltage_v:.2f}"
-        
-        bat_color = "red" if (report.battery.voltage_v and report.battery.voltage_v < 10.5) else "green"
-        bat_text = f"[{bat_color}]BAT: {battery_pct}% ({voltage}V)[/{bat_color}]"
-        
-        armed_marker = "🟢 ARMED" if report.armed else "🔴 DISARMED"
-        
-        altitude = -report.local_position.down_m if report.local_position.valid else 0.0
-        nav = "GPS" if report.mode == NavigationMode.MODE_A_GPS else ("FLOW" if report.mode == NavigationMode.MODE_B_LOCAL else "NONE")
-        mode = report.autopilot_mode
-        if self.controller_state is not None:
-            state = self.controller_state()
-            if state and state != "IDLE":
-                mode = f"{mode}/{state}"
-                
-        return (
-            f"[bold cyan]MODE:[/bold cyan] {mode} | [bold]{armed_marker}[/bold] | {bat_text} | "
-            f"[bold cyan]ALT:[/bold cyan] {altitude:.1f}m | [bold cyan]NAV:[/bold cyan] {nav} | "
-            f"[bold cyan]POS:[/bold cyan] ({report.local_position.north_m:.1f}, {report.local_position.east_m:.1f}, {report.local_position.down_m:.1f})"
-        )
-
+        lines = []
+        for sysid, sensors in self.sensors_map.items():
+            report = sensors.snapshot()
+            
+            battery_pct = "NA"
+            if report.battery.remaining_percent is not None:
+                battery_pct = f"{report.battery.remaining_percent * 100:.0f}"
+            voltage = "NA" if report.battery.voltage_v is None else f"{report.battery.voltage_v:.2f}"
+            
+            bat_color = "red" if (report.battery.voltage_v and report.battery.voltage_v < 10.5) else "green"
+            bat_text = f"[{bat_color}]BAT: {battery_pct}% ({voltage}V)[/{bat_color}]"
+            
+            armed_marker = "🟢 ARMED" if report.armed else "🔴 DISARMED"
+            
+            altitude = -report.local_position.down_m if report.local_position.valid else 0.0
+            nav = "GPS" if report.mode == NavigationMode.MODE_A_GPS else ("FLOW" if report.mode == NavigationMode.MODE_B_LOCAL else "NONE")
+            mode = report.autopilot_mode
+            
+            cstate = self.controller_state_map.get(sysid)
+            if cstate is not None:
+                state = cstate()
+                if state and state != "IDLE":
+                    mode = f"{mode}/{state}"
+                    
+            lines.append(
+                f"[bold yellow][SYSID:{sysid}][/bold yellow] [bold cyan]MODE:[/bold cyan] {mode} | [bold]{armed_marker}[/bold] | {bat_text} | "
+                f"[bold cyan]ALT:[/bold cyan] {altitude:.1f}m | [bold cyan]NAV:[/bold cyan] {nav} | "
+                f"[bold cyan]POS:[/bold cyan] ({report.local_position.north_m:.1f}, {report.local_position.east_m:.1f}, {report.local_position.down_m:.1f})"
+            )
+        return "\n".join(lines)
     def update_telemetry(self) -> None:
         try:
             self.header_widget.update(self._get_telemetry_markup())

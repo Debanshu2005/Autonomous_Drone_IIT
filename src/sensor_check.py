@@ -10,6 +10,7 @@ The module classifies the active navigation frame before every task:
 
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 from dataclasses import dataclass
@@ -49,6 +50,14 @@ class EkfState:
 
 
 @dataclass(frozen=True)
+class GlobalPositionState:
+    lat_deg: float
+    lon_deg: float
+    relative_alt_m: float
+    fresh: bool
+    valid: bool
+
+@dataclass(frozen=True)
 class LocalPositionState:
     north_m: float
     east_m: float
@@ -78,6 +87,7 @@ class SensorReport:
     mode: NavigationMode
     gps: GpsState
     ekf: EkfState
+    global_position: GlobalPositionState
     local_position: LocalPositionState
     flow_or_vision: FlowVisionState
     battery: BatteryState
@@ -164,10 +174,12 @@ class SensorDiscovery:
             mode = NavigationMode.MODE_C_DEGRADED
             reasons.extend(self._degraded_reasons(gps, ekf, local_position, flow_or_vision))
 
+        global_position = self._global_position_state(gps)
         return SensorReport(
             mode=mode,
             gps=gps,
             ekf=ekf,
+            global_position=global_position,
             local_position=local_position,
             flow_or_vision=flow_or_vision,
             battery=battery,
@@ -221,6 +233,27 @@ class SensorDiscovery:
             healthy_for_global=healthy_for_global,
             healthy_for_local=healthy_for_local,
         )
+
+
+    def _global_position_state(self, fallback_gps: GpsState) -> GlobalPositionState:
+        cached = self.mavlink.latest('GLOBAL_POSITION_INT')
+        msg = cached.message if cached else None
+        fresh = _fresh(cached, self.thresholds.message_max_age_s)
+        if fresh and msg:
+            lat = float(getattr(msg, 'lat', 0)) / 1e7
+            lon = float(getattr(msg, 'lon', 0)) / 1e7
+            alt = float(getattr(msg, 'relative_alt', 0)) / 1000.0
+            return GlobalPositionState(lat, lon, alt, True, True)
+            
+        cached = self.mavlink.latest('GPS_RAW_INT')
+        msg = cached.message if cached else None
+        fresh = _fresh(cached, self.thresholds.message_max_age_s)
+        if fresh and msg:
+            lat = float(getattr(msg, 'lat', 0)) / 1e7
+            lon = float(getattr(msg, 'lon', 0)) / 1e7
+            return GlobalPositionState(lat, lon, 0.0, True, fallback_gps.healthy)
+            
+        return GlobalPositionState(0.0, 0.0, 0.0, False, False)
 
     def _local_position_state(self) -> LocalPositionState:
         cached = self.mavlink.latest("LOCAL_POSITION_NED")

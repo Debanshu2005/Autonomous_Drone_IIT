@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-27T06:20:51.639Z",
-  "generatedAtEpochMs": 1787811651639,
+  "generatedAt": "2026-08-27T11:07:46.379Z",
+  "generatedAtEpochMs": 1787828866379,
   "generator": {
     "name": "Code Janitor",
     "feature": "workspace-memory"
@@ -14,27 +14,28 @@
   "workspace": {
     "name": "Autonomous_Drone_IIT",
     "root": "d:\\CityGrid\\my-project\\Autonomous_Drone_IIT",
-    "activeFile": "src/main.py",
-    "refreshReason": "startup",
+    "activeFile": "src/trajectory_engine.py",
+    "refreshReason": "tracked-change",
     "outputFiles": {
       "markdown": "graphify-out/WORKSPACE_MEMORY.md",
       "markdownMirror": "workspacememory.md",
       "structuredManifest": "workspace.json"
     },
     "suggestedStartingPoints": [
-      "src/main.py",
+      "src/trajectory_engine.py",
+      "requirements.txt",
       ".gitignore",
       "README.md"
     ],
     "stats": {
-      "totalFiles": 17,
+      "totalFiles": 18,
       "topLevelAreas": [
         {
-          "name": "[root]",
-          "count": 6
+          "name": "src",
+          "count": 7
         },
         {
-          "name": "src",
+          "name": "[root]",
           "count": 6
         },
         {
@@ -57,7 +58,7 @@
       "primaryFileTypes": [
         {
           "name": ".py",
-          "count": 7
+          "count": 8
         },
         {
           "name": ".md",
@@ -162,6 +163,12 @@
           "isKeyFile": false
         },
         {
+          "path": "src/safety.py",
+          "topLevelArea": "src",
+          "extension": ".py",
+          "isKeyFile": false
+        },
+        {
           "path": "src/sensor_check.py",
           "topLevelArea": "src",
           "extension": ".py",
@@ -199,27 +206,117 @@
     "error": "package.json was not found."
   },
   "currentStack": {
-    "lastActivityAt": "",
-    "trackedChangeCount": 0,
-    "trackedFileSnapshotCount": 0,
+    "lastActivityAt": "2026-08-27T11:07:38.271Z",
+    "trackedChangeCount": 2,
+    "trackedFileSnapshotCount": 2,
     "changeTypeCounts": {
-      "save": 0,
+      "save": 2,
       "create": 0,
       "delete": 0,
       "rename": 0
     }
   },
-  "trackedSnapshots": [],
-  "recentChanges": [],
-  "hotFiles": [],
+  "trackedSnapshots": [
+    {
+      "filePath": "src/trajectory_engine.py",
+      "updatedAt": 1787828858271,
+      "lineCount": 676,
+      "charCount": 23042,
+      "hash": "dd0e86f684b0",
+      "preview": "\"\"\" / Natural-language command parsing and NED/global waypoint generation. / All local geometry is expressed in NED convention: / - x / north is positive forward toward geographic north. / - y / east is positive towar..."
+    },
+    {
+      "filePath": "requirements.txt",
+      "updatedAt": 1787824397943,
+      "lineCount": 6,
+      "charCount": 75,
+      "hash": "34eeed94fe28",
+      "preview": "mavsdk>=2.8.0 / pymavlink>=2.4.41 / pyserial>=3.5 / rich>=13.0.0 / textual>=0.40.0"
+    }
+  ],
+  "recentChanges": [
+    {
+      "type": "save",
+      "path": "src/trajectory_engine.py",
+      "toPath": "",
+      "summary": "Saved without a textual diff.",
+      "recordedAt": "2026-08-27T11:07:38.271Z",
+      "recordedAtEpochMs": 1787828858271,
+      "before": {
+        "kind": "text",
+        "lineCount": 676,
+        "charCount": 23042,
+        "hash": "dd0e86f684b0",
+        "preview": "\"\"\" / Natural-language command parsing and NED/global waypoint generation. / All local geometry is expressed in NED convention: / - x / north is positive forward toward geographic north. / - y / east is positive towar...",
+        "updatedAt": 1787828858271
+      },
+      "after": {
+        "kind": "text",
+        "lineCount": 676,
+        "charCount": 23042,
+        "hash": "dd0e86f684b0",
+        "preview": "\"\"\" / Natural-language command parsing and NED/global waypoint generation. / All local geometry is expressed in NED convention: / - x / north is positive forward toward geographic north. / - y / east is positive towar...",
+        "updatedAt": 1787828858271
+      },
+      "diff": null
+    },
+    {
+      "type": "save",
+      "path": "requirements.txt",
+      "toPath": "",
+      "summary": "Line 1: inserted 6 lines.",
+      "recordedAt": "2026-08-27T09:53:17.943Z",
+      "recordedAtEpochMs": 1787824397943,
+      "before": {
+        "kind": "text",
+        "lineCount": 0,
+        "charCount": 0,
+        "hash": "empty",
+        "preview": "",
+        "updatedAt": 1787824397941
+      },
+      "after": {
+        "kind": "text",
+        "lineCount": 6,
+        "charCount": 75,
+        "hash": "34eeed94fe28",
+        "preview": "mavsdk>=2.8.0 / pymavlink>=2.4.41 / pyserial>=3.5 / rich>=13.0.0 / textual>=0.40.0",
+        "updatedAt": 1787824397943
+      },
+      "diff": {
+        "lineStart": 1,
+        "removedLines": 0,
+        "addedLines": 6,
+        "summary": "Line 1: inserted 6 lines.",
+        "beforeFragment": "",
+        "afterFragment": "mavsdk>=2.8.0 / pymavlink>=2.4.41 / pyserial>=3.5 / rich>=13.0.0 / textual>=0.40.0"
+      }
+    }
+  ],
+  "hotFiles": [
+    {
+      "filePath": "requirements.txt",
+      "count": 1
+    },
+    {
+      "filePath": "src/trajectory_engine.py",
+      "count": 1
+    }
+  ],
   "git": {
     "available": true,
     "branch": "master",
-    "headSummary": "2026-08-26 adc81ba feat: implement trajectory engine and base infrastructure for autonomous drone control",
-    "statusSummary": "3 modifieds",
-    "changedFileCount": 3,
+    "headSummary": "2026-08-27 dc99e20 feat: implement trajectory engine for parsing natural-language drone commands and generating mission waypoints",
+    "statusSummary": "9 modifieds",
+    "changedFileCount": 9,
     "statusLines": [
       "M graphify-out/WORKSPACE_MEMORY.md",
+      "M src/main.py",
+      "M src/mavlink_io.py",
+      "M src/safety.py",
+      "M src/sensor_check.py",
+      "M src/terminal_ui.py",
+      "M src/trajectory_engine.py",
       "M workspace.json",
       "M workspacememory.md"
     ],

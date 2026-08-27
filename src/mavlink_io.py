@@ -102,7 +102,7 @@ def autodetect_pixhawk_connection(
                 )
                 # 2. Fast Cache Validation
                 msg = master.wait_heartbeat(blocking=True, timeout=2.0)
-                if msg and msg.get_srcSystem() == 1:
+                if msg and msg.get_srcSystem() > 0:
                     LOGGER.info(f"Cache validation successful for {cached_port} at {cached_baud}")
                     return master
                 else:
@@ -133,7 +133,7 @@ def autodetect_pixhawk_connection(
                     autoreconnect=True
                 )
                 msg = master.wait_heartbeat(blocking=True, timeout=1.0)
-                if msg and msg.get_srcSystem() == 1:
+                if msg and msg.get_srcSystem() > 0:
                     # 5. Auto-Save & Return
                     LOGGER.info(f"Valid Pixhawk found at {port} with {baud} baud")
                     try:
@@ -200,8 +200,8 @@ class MavlinkConnection:
         if heartbeat is None:
             raise MavlinkError(f"no heartbeat from Pixhawk within {heartbeat_timeout_s:.0f}s")
 
-        self.target_system = 1
-        self.target_component = 1
+        self.target_system = heartbeat.get_srcSystem()
+        self.target_component = heartbeat.get_srcComponent()
         self._cache_message(heartbeat)
         LOGGER.info(
             "MAVLink heartbeat received from system=%s component=%s",
@@ -243,7 +243,7 @@ class MavlinkConnection:
                 continue
             if msg.get_type() == "BAD_DATA":
                 continue
-            if not msg or msg.get_srcSystem() != 1:
+            if not msg or msg.get_srcSystem() != self.target_system:
                 continue
             self._cache_message(msg)
 
@@ -289,8 +289,8 @@ class MavlinkConnection:
             mavutil.mavlink.MAV_DATA_STREAM_RC_CHANNELS,
         ):
             self.master.mav.request_data_stream_send(
-                1,  # target_system
-                1,  # target_component
+                self.target_system,
+                self.target_component,
                 stream_id,
                 rate_hz,
                 1,
@@ -299,8 +299,8 @@ class MavlinkConnection:
     async def set_message_interval(self, message_id: int, rate_hz: float) -> None:
         interval_us = -1 if rate_hz <= 0 else int(1_000_000 / rate_hz)
         self.master.mav.command_long_send(
-            1,  # target_system
-            1,  # target_component
+            self.target_system,
+            self.target_component,
             mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
             0,
             message_id,
@@ -322,8 +322,8 @@ class MavlinkConnection:
     ) -> Any:
         sent_at = time.monotonic()
         self.master.mav.command_long_send(
-            1,  # target_system
-            1,  # target_component
+            self.target_system,
+            self.target_component,
             command,
             0,
             *params,
@@ -354,7 +354,7 @@ class MavlinkConnection:
 
         sent_at = time.monotonic()
         self.master.mav.set_mode_send(
-            1,  # target_system
+            self.target_system,
             mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
             mode_id,
         )
@@ -435,8 +435,8 @@ class MavlinkConnection:
             yaw_value = yaw_rad
         self.master.mav.set_position_target_global_int_send(
             int(time.monotonic() * 1000) & 0xFFFFFFFF,
-            1,  # target_system
-            1,  # target_component
+            self.target_system,
+            self.target_component,
             mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
             type_mask,
             int(lat_deg * 1e7),
@@ -476,8 +476,8 @@ class MavlinkConnection:
             yaw_value = yaw_rad
         self.master.mav.set_position_target_local_ned_send(
             int(time.monotonic() * 1000) & 0xFFFFFFFF,
-            1,  # target_system
-            1,  # target_component
+            self.target_system,
+            self.target_component,
             mavutil.mavlink.MAV_FRAME_LOCAL_NED,
             type_mask,
             north_m,
@@ -512,8 +512,8 @@ class MavlinkConnection:
         )
         self.master.mav.set_position_target_local_ned_send(
             int(time.monotonic() * 1000) & 0xFFFFFFFF,
-            1,  # target_system
-            1,  # target_component
+            self.target_system,
+            self.target_component,
             mavutil.mavlink.MAV_FRAME_BODY_NED,
             type_mask,
             0,
@@ -528,3 +528,35 @@ class MavlinkConnection:
             0,
             yaw_rate_rad_s,
         )
+
+
+class SwarmManager:
+    """Manages multiple MAVLink connections for a swarm."""
+    
+    def __init__(self, urls: list[str], source_system: int = 255, source_component: int = 191):
+        self.urls = urls
+        self.source_system = source_system
+        self.source_component = source_component
+        self.connections: dict[int, MavlinkConnection] = {}
+        
+    async def connect_all(self, heartbeat_timeout_s: float = 30.0) -> None:
+        async def _connect_one(url):
+            import asyncio
+            conn = MavlinkConnection(url, source_system=self.source_system, source_component=self.source_component)
+            try:
+                await conn.connect(heartbeat_timeout_s)
+                self.connections[conn.target_system] = conn
+                LOGGER.info(f"SwarmManager: Registered drone SYSID {conn.target_system} via {url}")
+            except Exception as e:
+                LOGGER.error(f"SwarmManager: Failed to connect to {url}: {e}")
+                
+        import asyncio
+        await asyncio.gather(*[_connect_one(url) for url in self.urls])
+        
+    async def start_all(self, requested_rates_hz=None) -> None:
+        import asyncio
+        await asyncio.gather(*[conn.start(requested_rates_hz) for conn in self.connections.values()])
+        
+    async def close_all(self) -> None:
+        import asyncio
+        await asyncio.gather(*[conn.close() for conn in self.connections.values()])

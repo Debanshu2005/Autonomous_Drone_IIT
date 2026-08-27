@@ -13,9 +13,9 @@ LOGGER = logging.getLogger(__name__)
 class SafetyMonitor:
     def __init__(self, repl, min_battery_voltage_v: float = 10.5) -> None:
         self.repl = repl
-        self.mavlink = repl.mavlink
-        self.sensors = repl.sensors
-        self.controller = repl.controller
+        self.swarm = repl.swarm
+        self.sensors_map = repl.sensors_map
+        self.controllers = repl.controllers
         self.min_battery_voltage_v = min_battery_voltage_v
         
         self._stop_watchdog = threading.Event()
@@ -47,44 +47,32 @@ class SafetyMonitor:
 
     async def _emergency_shutdown(self) -> None:
         import sys
-        LOGGER.error("CRITICAL: SIGINT received. Evaluating vehicle state...")
+        LOGGER.error("CRITICAL: SIGINT received. Evaluating swarm state...")
         
-        # Telemetry Pre-Check
-        report = self.sensors.snapshot()
-        altitude_m = -report.local_position.down_m if report.local_position.valid else 0.0
-        
-        # 2. Conditional Branching (Grounded or Disarmed)
-        if not report.armed or altitude_m <= 0.2:
-            LOGGER.info("[STATUS] Vehicle is grounded/disarmed. Exiting immediately.")
-            await self.repl.stop()
-            sys.exit(0)
+        for sysid, sensors in self.sensors_map.items():
+            report = sensors.snapshot()
+            altitude_m = -report.local_position.down_m if report.local_position.valid else 0.0
             
-        # 2. Conditional Branching (Airborne & Armed)
-        LOGGER.info(f"[STATUS] Vehicle is airborne (Alt: {altitude_m:.1f}m) and armed. Executing emergency soft-land...")
-        
-        # 1. Abort active tasks
-        self.repl._flush_queue()
-        if self.repl._active_future and not self.repl._active_future.done():
-            self.repl._active_future.cancel()
-            
-        # 2. Command LAND mode
-        try:
-            await self.mavlink.set_mode("LAND", timeout_s=3.0)
-            LOGGER.info("Emergency LAND mode activated.")
-        except Exception as exc:
-            LOGGER.error(f"Failed to set LAND mode during emergency: {exc}")
-            
-        # 3. Monitor descent
-        LOGGER.info("Monitoring descent...")
-        while True:
-            report = self.sensors.snapshot()
-            if not report.armed:
-                LOGGER.info("Drone is disarmed. Emergency landing complete.")
-                break
+            if not report.armed or altitude_m <= 0.2:
+                LOGGER.info(f"[SYSID:{sysid}] Grounded/disarmed.")
+                continue
                 
-            await asyncio.sleep(0.5)
+            LOGGER.info(f"[SYSID:{sysid}] Airborne (Alt: {altitude_m:.1f}m). Emergency soft-land...")
             
-        # 4. Clean exit
+            self.repl._flush_queue_sysid(sysid)
+            task = self.repl._active_futures.get(sysid)
+            if task and not task.done():
+                task.cancel()
+                
+            conn = self.swarm.connections.get(sysid)
+            if conn:
+                try:
+                    await conn.set_mode("LAND", timeout_s=3.0)
+                except Exception as exc:
+                    LOGGER.error(f"[SYSID:{sysid}] Failed to set LAND mode: {exc}")
+
+        # In a real swarm we might monitor all descents, for now we exit after a delay
+        await asyncio.sleep(5)
         await self.repl.stop()
         sys.exit(0)
 
@@ -98,41 +86,48 @@ class SafetyMonitor:
             time.sleep(0.5)
             
     def _check_vitals(self) -> None:
-        # Link Loss Check
-        heartbeat = self.mavlink.latest("HEARTBEAT")
-        if heartbeat is None or (time.monotonic() - heartbeat.received_at_s) > 2.0:
-            LOGGER.error("CRITICAL: MAVLink connection lost for > 2.0s!")
-            self._trigger_emergency_land()
-            return
+        for sysid, sensors in self.sensors_map.items():
+            conn = self.swarm.connections.get(sysid)
+            if not conn:
+                continue
+                
+            heartbeat = conn.latest("HEARTBEAT")
+            if heartbeat is None or (time.monotonic() - heartbeat.received_at_s) > 2.0:
+                LOGGER.error(f"[SYSID:{sysid}] CRITICAL: MAVLink connection lost for > 2.0s!")
+                self._trigger_emergency_land(sysid)
+                continue
+                
+            report = sensors.snapshot()
             
-        report = self.sensors.snapshot()
-        
-        # Battery Voltage Check
-        if report.battery.voltage_v is not None and report.battery.voltage_v < self.min_battery_voltage_v:
-            LOGGER.error(f"CRITICAL: Battery voltage ({report.battery.voltage_v:.2f}V) below threshold ({self.min_battery_voltage_v}V)!")
-            self._trigger_emergency_land()
-            return
-            
-        # GPS Lock Check during spatial formation
-        if report.gps.fix_type < 3 and self.controller.state == FlightState.TRAJECTORY_FOLLOW:
-            LOGGER.warning("GPS fix degraded during spatial formation. Pausing execution.")
-            self._trigger_pause()
+            if report.battery.voltage_v is not None and report.battery.voltage_v < self.min_battery_voltage_v:
+                LOGGER.error(f"[SYSID:{sysid}] CRITICAL: Battery voltage ({report.battery.voltage_v:.2f}V) below threshold!")
+                self._trigger_emergency_land(sysid)
+                continue
+                
+            controller = self.controllers.get(sysid)
+            if controller and report.gps.fix_type < 3 and controller.state == FlightState.TRAJECTORY_FOLLOW:
+                LOGGER.warning(f"[SYSID:{sysid}] GPS fix degraded. Pausing execution.")
+                self._trigger_pause(sysid)
 
-    def _trigger_emergency_land(self) -> None:
-        self.repl._flush_queue()
-        if self.repl._active_future and not self.repl._active_future.done():
-            self.repl._active_future.cancel()
+    def _trigger_emergency_land(self, sysid: int) -> None:
+        self.repl._flush_queue_sysid(sysid)
+        task = self.repl._active_futures.get(sysid)
+        if task and not task.done():
+            task.cancel()
             
         sequence = TaskSequence([ParsedTask(TaskAction.LAND, {}, "emergency land")], "emergency land")
-        self.repl._queue.put(sequence)
+        if sysid in self.repl._queues:
+            self.repl._queues[sysid].put_nowait(sequence)
         
-    def _trigger_pause(self) -> None:
-        self.repl._flush_queue()
-        if self.repl._active_future and not self.repl._active_future.done():
-            self.repl._active_future.cancel()
+    def _trigger_pause(self, sysid: int) -> None:
+        self.repl._flush_queue_sysid(sysid)
+        task = self.repl._active_futures.get(sysid)
+        if task and not task.done():
+            task.cancel()
             
         sequence = TaskSequence([ParsedTask(TaskAction.HOLD, {}, "safety pause")], "safety pause")
-        self.repl._queue.put(sequence)
+        if sysid in self.repl._queues:
+            self.repl._queues[sysid].put_nowait(sequence)
 
     def stop(self) -> None:
         self._stop_watchdog.set()

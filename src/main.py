@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from flight_controller import FlightAbort, FlightController, FlightControllerConfig
-from mavlink_io import MavlinkConnection, MavlinkError
+from mavlink_io import SwarmManager, MavlinkConnection, MavlinkError
 from sensor_check import (
     NavigationMode,
     SensorDiscovery,
@@ -40,6 +40,7 @@ from trajectory_engine import (
     build_trajectory,
     command_guide,
     parse_task_sequence,
+    parse_swarm_target,
 )
 from terminal_ui import DroneDashboardApp
 
@@ -64,49 +65,48 @@ class CliConfig:
 
 
 class MissionRepl:
+    """Read-eval-print loop for parsing and executing commands across a swarm."""
+
     def __init__(
         self,
-        mavlink: MavlinkConnection,
-        sensors: SensorDiscovery,
-        controller: FlightController,
+        swarm: SwarmManager,
+        sensors_map: dict[int, SensorDiscovery],
+        controllers: dict[int, FlightController],
         config: CliConfig,
         dashboard: DroneDashboardApp,
     ) -> None:
-        self.mavlink = mavlink
-        self.sensors = sensors
-        self.controller = controller
+        self.swarm = swarm
+        self.sensors_map = sensors_map
+        self.controllers = controllers
         self.config = config
         self.dashboard = dashboard
+        
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._queue: queue.Queue[Optional[TaskSequence]] = queue.Queue()
-        self._active_future: Optional[concurrent.futures.Future[None]] = None
-        self._worker_stop = threading.Event()
-        self._worker_thread = threading.Thread(target=self._worker_loop, name="mission-worker", daemon=True)
-        self._status_task: Optional[asyncio.Task[None]] = None
+        self._queues: dict[int, asyncio.Queue] = {}
+        self._active_futures: dict[int, asyncio.Task] = {}
         self._stop = asyncio.Event()
 
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
-        self._worker_thread.start()
-        self.dashboard.system_log("[STATUS] Autonomous terminal mission controller ready. Type 'help' for commands.")
+        
+        # Create an async worker queue for each drone
+        for sysid in self.controllers:
+            self._queues[sysid] = asyncio.Queue()
+            asyncio.create_task(self._worker_loop(sysid))
+            
+        self.dashboard.system_log("[STATUS] Autonomous swarm controller ready. Type 'help' for commands.")
         try:
             while not self._stop.is_set():
                 line = await self.dashboard.get_command_async()
                 await self._handle_line(line)
         finally:
-            self._worker_stop.set()
             self._flush_queue()
-            if self._active_future and not self._active_future.done():
-                self._active_future.cancel()
-            self._queue.put(None)
-            self._worker_thread.join(timeout=3.0)
-            if self._status_task:
-                self._status_task.cancel()
-                await asyncio.gather(self._status_task, return_exceptions=True)
-
+            for task in self._active_futures.values():
+                if not task.done():
+                    task.cancel()
+                    
     async def stop(self) -> None:
         self._stop.set()
-        # Ensure the queue gets unblocked
         self.dashboard._cmd_queue.put_nowait("")
 
     async def _handle_line(self, line: str) -> None:
@@ -120,14 +120,22 @@ class MissionRepl:
             self._print_help()
             return
         if command.lower().removeprefix("[cmd]").strip() == "status":
-            report = await self.sensors.probe(wait_s=1.0)
-            self.dashboard.system_log(f"[STATUS] {format_sensor_report(report)}")
-            for reason in report.reasons:
-                self.dashboard.system_log(f"[STATUS] {reason}")
+            for sysid, sensors in self.sensors_map.items():
+                report = await sensors.probe(wait_s=1.0)
+                self.dashboard.system_log(f"[SYSID:{sysid}] [STATUS] {format_sensor_report(report)}")
+                for reason in report.reasons:
+                    self.dashboard.system_log(f"[SYSID:{sysid}] [STATUS] {reason}")
             return
 
         try:
-            sequence = parse_task_sequence(command, default_altitude_m=self.config.default_altitude_m)
+            target_sysids, command_body = parse_swarm_target(command, list(self.controllers.keys()))
+            if not command_body:
+                return
+            if not target_sysids:
+                self.dashboard.system_log(f"[STATUS] No valid drones targeted. Active sysids: {list(self.controllers.keys())}")
+                return
+                
+            sequence = parse_task_sequence(command_body, default_altitude_m=self.config.default_altitude_m)
         except ValueError as exc:
             self.dashboard.system_log(f"[STATUS] Command parse error: {exc}")
             self.dashboard.system_log(command_guide())
@@ -135,60 +143,80 @@ class MissionRepl:
 
         names = ", ".join(sequence.action_names)
         self.dashboard.system_log(
-            f"[STATUS] Parsing command: Queued {len(sequence.tasks)} tasks ({names})."
+            f"[STATUS] Queued {len(sequence.tasks)} tasks ({names}) for SYSIDs: {target_sysids}"
         )
         for note in sequence.notes:
             self.dashboard.system_log(f"[STATUS] Parser note: {note}")
 
         if self._is_interrupt(sequence):
-            self.dashboard.system_log("[STATUS] High-priority interrupt received. Flushing task queue.")
-            self._flush_queue()
-            if self._active_future and not self._active_future.done():
-                self._active_future.cancel()
+            self.dashboard.system_log(f"[STATUS] High-priority interrupt received. Flushing task queues for {target_sysids}.")
+            for sysid in target_sysids:
+                self._flush_queue_sysid(sysid)
+                task = self._active_futures.get(sysid)
+                if task and not task.done():
+                    task.cancel()
 
-        self._queue.put(sequence)
+        for sysid in target_sysids:
+            self._queues[sysid].put_nowait(sequence)
 
-    def _worker_loop(self) -> None:
-        while not self._worker_stop.is_set():
-            sequence = self._queue.get()
+    async def _worker_loop(self, sysid: int) -> None:
+        queue = self._queues[sysid]
+        while not self._stop.is_set():
+            sequence = await queue.get()
             if sequence is None:
-                return
-            if self._loop is None:
-                self.dashboard.system_log("[STATUS] Worker loop is not ready.")
                 continue
-            future = asyncio.run_coroutine_threadsafe(self._execute_sequence(sequence), self._loop)
-            self._active_future = future
+                
+            task = asyncio.create_task(self._execute_sequence(sysid, sequence))
+            self._active_futures[sysid] = task
             try:
-                future.result()
-            except concurrent.futures.CancelledError:
-                self.dashboard.system_log("[STATUS] Active sequence cancelled.")
+                await task
+            except asyncio.CancelledError:
+                self.dashboard.system_log(f"[SYSID:{sysid}] [STATUS] Active sequence cancelled.")
             except Exception as exc:
-                self.dashboard.system_log(f"[STATUS] Sequence failed: {exc}")
+                self.dashboard.system_log(f"[SYSID:{sysid}] [STATUS] Sequence failed: {exc}")
             finally:
-                if self._active_future is future:
-                    self._active_future = None
+                if self._active_futures.get(sysid) is task:
+                    del self._active_futures[sysid]
+            queue.task_done()
 
-    async def _execute_sequence(self, sequence: TaskSequence) -> None:
+    async def _execute_sequence(self, sysid: int, sequence: TaskSequence) -> None:
+        controller = self.controllers[sysid]
+        sensors = self.sensors_map[sysid]
+        
+        def origin_from_report(report):
+            return VehicleOrigin(
+                local_north_m=report.local_position.north_m,
+                local_east_m=report.local_position.east_m,
+                local_down_m=report.local_position.down_m,
+                lat_deg=report.global_position.lat_deg,
+                lon_deg=report.global_position.lon_deg,
+                relative_alt_m=report.global_position.relative_alt_m,
+            )
+            
         try:
-            await self.controller.execute_task_queue(
+            await controller.execute_task_queue(
                 sequence.tasks,
-                lambda task, report: build_trajectory(task, report, self._origin_from_report(report)),
+                lambda task, report: build_trajectory(task, report, origin_from_report(report)),
             )
         except (FlightAbort, MavlinkError) as exc:
-            self.dashboard.system_log(f"[STATUS] Task aborted: {exc}")
+            self.dashboard.system_log(f"[SYSID:{sysid}] [STATUS] Task aborted: {exc}")
         except asyncio.CancelledError:
-            self.dashboard.system_log("[STATUS] Sequence cancellation acknowledged.")
+            self.dashboard.system_log(f"[SYSID:{sysid}] [STATUS] Sequence cancellation acknowledged.")
             raise
         except Exception as exc:
             LOGGER.exception("Unexpected task failure")
-            self.dashboard.system_log(f"[STATUS] Unexpected task failure: {exc}")
+            self.dashboard.system_log(f"[SYSID:{sysid}] [STATUS] Unexpected task failure: {exc}")
 
     def _flush_queue(self) -> None:
-        while True:
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                return
+        for sysid in self._queues:
+            self._flush_queue_sysid(sysid)
+            
+    def _flush_queue_sysid(self, sysid: int) -> None:
+        if sysid not in self._queues: return
+        q = self._queues[sysid]
+        while not q.empty():
+            q.get_nowait()
+            q.task_done()
 
     def _is_interrupt(self, sequence: TaskSequence) -> bool:
         return (
@@ -201,67 +229,14 @@ class MissionRepl:
             }
         )
 
-    def _print_plan_summary(self, report: SensorReport, sequence: TaskSequence) -> None:
-        for task in sequence.tasks:
-            if task.action in {TaskAction.HOVER, TaskAction.HOLD, TaskAction.LAND, TaskAction.RTL}:
-                continue
-            plan = build_trajectory(task, report, self._origin_from_report(report))
-            self.dashboard.system_log(f"[STATUS] Sensor mode: {report.mode.value}")
-            self.dashboard.system_log(f"[STATUS] Plan: {plan.description}")
-            self.dashboard.system_log(f"[STATUS] Frame: {plan.frame.value}")
-            self.dashboard.system_log(f"[STATUS] Targets: {plan.count}")
-            if plan.local_targets:
-                first = plan.local_targets[0]
-                last = plan.local_targets[-1]
-                self.dashboard.system_log(
-                    "[STATUS] Local NED preview: "
-                    f"first=({first.north_m:.1f},{first.east_m:.1f},{first.down_m:.1f}) "
-                    f"last=({last.north_m:.1f},{last.east_m:.1f},{last.down_m:.1f})"
-                )
-            if plan.global_targets:
-                first_global = plan.global_targets[0]
-                self.dashboard.system_log(
-                    "[STATUS] Global preview: "
-                    f"lat={first_global.lat_deg:.7f} lon={first_global.lon_deg:.7f} "
-                    f"alt={first_global.relative_alt_m:.1f}m"
-                )
-            return
-
-    def _origin_from_report(self, report: SensorReport) -> VehicleOrigin:
-        lat_deg: Optional[float] = None
-        lon_deg: Optional[float] = None
-        relative_alt_m: Optional[float] = None
-
-        global_position = self.mavlink.latest_message("GLOBAL_POSITION_INT", 2.0)
-        if global_position is not None:
-            lat_deg = float(getattr(global_position, "lat", 0)) / 1e7
-            lon_deg = float(getattr(global_position, "lon", 0)) / 1e7
-            relative_alt_m = float(getattr(global_position, "relative_alt", 0)) / 1000.0
-        elif report.mode == NavigationMode.MODE_A_GPS:
-            gps = self.mavlink.latest_message("GPS_RAW_INT", 2.0)
-            if gps is not None:
-                lat_deg = float(getattr(gps, "lat", 0)) / 1e7
-                lon_deg = float(getattr(gps, "lon", 0)) / 1e7
-
-        if relative_alt_m is None and report.local_position.valid:
-            relative_alt_m = -report.local_position.down_m
-
-        return VehicleOrigin(
-            local_north_m=report.local_position.north_m,
-            local_east_m=report.local_position.east_m,
-            local_down_m=report.local_position.down_m,
-            lat_deg=lat_deg,
-            lon_deg=lon_deg,
-            relative_alt_m=relative_alt_m,
-        )
-
     def _print_help(self) -> None:
+        self.dashboard.system_log("Swarm commands: all: <cmd>, drone2: <cmd>")
         self.dashboard.system_log(command_guide())
-
 
 async def amain() -> int:
     parser = argparse.ArgumentParser(description="Adaptive MAVLink terminal mission controller")
-    parser.add_argument("--connect", default="serial://auto:115200", help="MAVLink connection URL")
+    parser.add_argument("--connect", default="serial://auto:115200", help="MAVLink connection URL (or base URL)")
+    parser.add_argument("--swarm-count", type=int, default=1, help="Number of swarm instances to connect to, increments port by 10")
     parser.add_argument("--default-altitude", type=float, default=3.0, help="Default task altitude in meters")
     parser.add_argument("--gps-min-satellites", type=int, default=8, help="Minimum satellites for GPS mode")
     parser.add_argument("--acceptance-radius", type=float, default=0.5, help="Waypoint acceptance radius in meters")
@@ -296,41 +271,70 @@ async def amain() -> int:
         telemetry_rate_hz=args.telemetry_rate,
     )
 
-    mavlink = MavlinkConnection(config.connection_url)
-    await mavlink.connect()
-    await mavlink.start()
+    urls = [u.strip() for u in config.connection_url.split(",")]
+    if args.swarm_count > 1 and len(urls) == 1:
+        import re
+        m = re.match(r"(.*?):(\d+)$", urls[0])
+        if m:
+            base_prefix = m.group(1)
+            base_port = int(m.group(2))
+            urls = [f"{base_prefix}:{base_port + i * 10}" for i in range(args.swarm_count)]
+        else:
+            LOGGER.warning("Could not parse port from --connect for --swarm-count. Using as single connection.")
+    swarm = SwarmManager(urls)
+    await swarm.connect_all()
+    
+    if not swarm.connections:
+        LOGGER.error("No drones connected! Exiting.")
+        return 1
 
     thresholds = SensorThresholds(
         gps_min_satellites=config.gps_min_satellites,
         battery_min_voltage_v=config.battery_min_voltage_v,
         battery_min_remaining_percent=config.battery_min_percent,
     )
-    sensors = SensorDiscovery(mavlink, thresholds)
-    await sensors.request_required_messages()
 
-    dashboard = DroneDashboardApp(sensors, prompt="[CMD] > ", rate_hz=config.telemetry_rate_hz)
+    sensors_map = {}
+    for sysid, conn in swarm.connections.items():
+        sensors = SensorDiscovery(conn, thresholds)
+        await sensors.request_required_messages()
+        sensors_map[sysid] = sensors
 
-    controller = FlightController(
-        mavlink,
-        sensors,
-        FlightControllerConfig(
-            takeoff_altitude_m=config.default_altitude_m,
-            waypoint_acceptance_radius_m=config.acceptance_radius_m,
-            waypoint_timeout_s=config.waypoint_timeout_s,
-            battery_warning_percent=config.battery_min_percent,
-            critical_battery_percent=config.critical_battery_percent,
-            critical_battery_voltage_v=config.critical_battery_voltage_v,
-            max_altitude_m=config.max_altitude_m,
-            final_action=config.final_action,
-        ),
-        status_sink=dashboard.system_log,
-    )
-    dashboard.controller_state = lambda: controller.state.value
-    repl = MissionRepl(mavlink, sensors, controller, config, dashboard)
+    dashboard = DroneDashboardApp(sensors_map, prompt="[CMD] > ", rate_hz=config.telemetry_rate_hz)
+
+    controllers = {}
+    controller_states = {}
+    for sysid, conn in swarm.connections.items():
+        sensors = sensors_map[sysid]
+        controller = FlightController(
+            conn,
+            sensors,
+            FlightControllerConfig(
+                takeoff_altitude_m=config.default_altitude_m,
+                waypoint_acceptance_radius_m=config.acceptance_radius_m,
+                waypoint_timeout_s=config.waypoint_timeout_s,
+                battery_warning_percent=config.battery_min_percent,
+                critical_battery_percent=config.critical_battery_percent,
+                critical_battery_voltage_v=config.critical_battery_voltage_v,
+                max_altitude_m=config.max_altitude_m,
+                final_action=config.final_action,
+            ),
+            status_sink=dashboard.system_log,
+        )
+        controllers[sysid] = controller
+        # Need closure to capture sysid
+        def get_state(c=controller):
+            return c.state.value
+        controller_states[sysid] = get_state
+        
+    dashboard.controller_state_map = controller_states
+    repl = MissionRepl(swarm, sensors_map, controllers, config, dashboard)
 
     from safety import SafetyMonitor
-    safety_monitor = SafetyMonitor(repl, min_battery_voltage_v=config.critical_battery_voltage_v or 10.5)
-    safety_monitor.start()
+    safety = SafetyMonitor(repl, config.critical_battery_voltage_v)
+    safety.start()
+    
+    await swarm.start_all()
 
     repl_task = asyncio.create_task(repl.run())
     try:
@@ -338,8 +342,7 @@ async def amain() -> int:
     finally:
         await repl.stop()
         await repl_task
-        safety_monitor.stop()
-        await mavlink.close()
+        await swarm.close_all()
     return 0
 
 
