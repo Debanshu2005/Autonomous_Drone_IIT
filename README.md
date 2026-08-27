@@ -11,18 +11,17 @@ EKF/GPS checks, battery failsafe, and landing execution.
 
 - Waits for Pixhawk connection, estimator health, and battery telemetry.
 - Detects GPS-enabled, GPS-denied optical-flow/vision, or degraded navigation modes.
-- Parses terminal commands such as natural-language takeoff/hover/land,
-  circles, goto offsets, and square search patterns.
+- Parses robust natural-language and compact commands using a regex lexer.
+  - Supports unit normalization (cm, m, km) for all distances.
+  - Commands include takeoff, hover, land, GOTO offsets, circles, squares, grids, spirals, and figure-8s.
 - Arms, takes off, streams global or local NED setpoints, and verifies waypoint
   acceptance radius.
-- Monitors software failsafes during flight:
-  - GPS/local-position degradation
-  - telemetry timeout
-  - battery telemetry timeout
-  - altitude limit
-  - waypoint timeout
-  - low and critical battery percentage
-  - emergency RC override channel
+- Monitors software failsafes during flight via `safety.py` watchdog daemon:
+  - MAVLink link loss (2.0s timeout triggers emergency LAND)
+  - Battery critical voltage (hardcoded 10.5V triggers emergency LAND)
+  - GPS/local-position degradation (pauses spatial formations with HOLD)
+  - State-aware Ctrl+C interrupt (graceful soft-land or immediate exit if grounded)
+  - Double-tap Ctrl+C hard abort
 - Refuses to arm by default until fresh Pixhawk battery telemetry is available.
 - Commands a soft landing with `LAND` on mission errors.
 
@@ -48,8 +47,9 @@ source .venv/bin/activate
 ```
 
 Connect the Pixhawk to the Raspberry Pi with a USB cable. The mission
-`connection_url` auto-detects the single connected Pixhawk USB serial device at
-`115200` baud by default:
+`connection_url` intelligently auto-detects the connected Pixhawk by sweeping
+Linux serial ports (`ttyAMA*`, `ttyUSB*`, `ttyACM*`) and a multi-baud fallback 
+matrix (921600, 115200, 57600), automatically caching the fastest route to `config.json`!
 
 ```text
 serial://auto:115200
@@ -80,15 +80,14 @@ Common REPL commands:
 
 ```text
 status
-[CMD] Take off, hover for 2 meters, and land
+[CMD] Take off to 300cm, hover for 2 seconds, and land
 [CMD] Takeoff to 5m, circle with 3m radius, then return to launch
 [CMD] Hover for 10s
 switch mode to guided
-swich mode to althold
-take off to 3 meters, hover for two seconds, and land
-circle r=5 h=3 n=36
+mode alt_hold
 fly in a 5m radius circle at 3m altitude
 square search pattern 10m h=3
+spiral size=10 h=5 duration=20
 go 10 meters north and 5 meters east at 3 meters altitude
 goto x=10 y=5 h=3
 hold

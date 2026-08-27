@@ -31,17 +31,20 @@ The script commands `LAND` when it detects:
 
 - no usable global position/GPS for more than `gps_loss_grace_s`
 - stale position or GPS telemetry for more than `telemetry_timeout_s`
-- stale battery telemetry for more than `battery_telemetry_timeout_s`
+- MAVLink link loss (via `safety.py` background watchdog; triggers at 2.0s timeout)
 - software geofence breach
 - temporary hotspot containment radius breach
 - temporary hotspot peer heartbeat loss
 - altitude above `max_altitude_agl_m`
 - waypoint timeout
 - mission runtime timeout
-- critical battery
+- critical battery voltage (via `safety.py` watchdog; defaults to `10.5V`)
 - missing remaining-percent battery telemetry after arming
 - uncaught software exception
-- Ctrl+C or service stop
+- Ctrl+C or service stop (state-aware graceful soft-land via `safety.py`)
+
+The script pauses execution (`HOLD`) when it detects:
+- GPS spatial degradation (GPS fix drops below 3 while tracing a spatial formation like circles or squares).
 
 For low battery, `low_battery_action` can be:
 
