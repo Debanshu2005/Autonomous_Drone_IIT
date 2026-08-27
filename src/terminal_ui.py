@@ -119,6 +119,14 @@ class DroneDashboardApp(App[None]):
             text.stylize("bold cyan")
 
         try:
-            self.call_from_thread(self.log_widget.write, text)
+            # Check if we are in the main async thread
+            asyncio.get_running_loop()
+            self.log_widget.write(text)
+        except RuntimeError:
+            # Background thread
+            try:
+                self.call_from_thread(self.log_widget.write, text)
+            except Exception:
+                pass
         except Exception:
-            pass # Fails if app not fully started/stopped, safely ignore
+            pass
