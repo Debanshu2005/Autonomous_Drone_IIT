@@ -14,6 +14,8 @@ from sensor_check import NavigationMode, SensorDiscovery, SensorReport
 
 
 class DroneDashboardApp(App[None]):
+    BINDINGS = [("ctrl+q", "quit", "Quit Dashboard"), ("ctrl+c", "quit", "Quit Dashboard")]
+    
     CSS = """
     Screen {
         layout: vertical;
