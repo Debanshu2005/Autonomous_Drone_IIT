@@ -1,6 +1,6 @@
 # Workspace Memory
 This file is maintained automatically by Code Janitor so Claude, Codex, Bob, and any other AI agent can reuse repo context without rescanning everything from scratch.
-Generated: 2026-08-27T15:26:33.218Z
+Generated: 2026-08-27T15:29:41.781Z
 Workspace: Autonomous_Drone_IIT
 Workspace root: d:\CityGrid\my-project\Autonomous_Drone_IIT
 Refresh reason: startup
@@ -16,13 +16,13 @@ Structured manifest: workspace.json
 - Audience: any AI agent working in this repository can treat this file as the current handoff ledger.
 - Graphify report: not available yet
 - Graphify graph: not available yet
-- Last activity: 2026-08-27T11:07:38.271Z
+- Last activity: no tracked activity yet
 ## Workspace Focus
-- Active file in focus: onboard_edge/trajectory_engine.py
-- Hottest files right now: requirements.txt (1), src/trajectory_engine.py (1)
-- Suggested starting points: onboard_edge/trajectory_engine.py, requirements.txt, src/trajectory_engine.py, .gitignore, README.md
+- Active file in focus: ground_station/laptop_client.py
+- Hottest files right now: none yet
+- Suggested starting points: ground_station/laptop_client.py, .gitignore, README.md
 ## Current Workspace
-- Active file: onboard_edge/trajectory_engine.py
+- Active file: ground_station/laptop_client.py
 - Tracked files in snapshot: 23
 - Top-level areas: onboard_edge (7), [root] (6), ground_station (3), scripts (2), tests (2), docs (1), legacy (1), missions (1)
 - Primary file types: .py (11), .md (3), .txt (3), .json (2), [no extension] (2), .ps1 (1), .sh (1)
@@ -30,54 +30,27 @@ Structured manifest: workspace.json
 ## Package Snapshot
 - Package metadata unavailable: package.json was not found.
 ## Current Stack
-- Logged change events: 2
-- Change mix: save (2)
-- Remembered file snapshots: 2
-- Working tree summary: 3 modifieds
+- Logged change events: 0
+- Change mix: none yet
+- Remembered file snapshots: 0
+- Working tree summary: clean
 ## Tracked Snapshots
-- src/trajectory_engine.py | 676 lines | 23042 chars | hash dd0e86f684b0
-  Last snapshot: 2026-08-27T11:07:38.271Z
-  Preview: """" / Natural-language command parsing and NED/global waypoint generation. / All local geometry is expressed in NED convention: / - x / north is positive forward toward geographic north. / - y / east is positive towar..."
-- requirements.txt | 6 lines | 75 chars | hash 34eeed94fe28
-  Last snapshot: 2026-08-27T09:53:17.943Z
-  Preview: "mavsdk>=2.8.0 / pymavlink>=2.4.41 / pyserial>=3.5 / rich>=13.0.0 / textual>=0.40.0"
+- No remembered file snapshots yet.
 
 ## Recent Changes
-### 2026-08-27T11:07:38.271Z | saved | src/trajectory_engine.py
-- Summary: Saved without a textual diff.
-- Before: 676 lines | 23,042 chars | hash dd0e86f684b0 | preview: """" / Natural-language command parsing and NED/global waypoint generation. / All local geometry is expressed in NED convention: / - x / north is positive forward toward geographic north. / - y / east is positive towar..."
-- After: 676 lines | 23,042 chars | hash dd0e86f684b0 | preview: """" / Natural-language command parsing and NED/global waypoint generation. / All local geometry is expressed in NED convention: / - x / north is positive forward toward geographic north. / - y / east is positive towar..."
-
-### 2026-08-27T09:53:17.943Z | saved | requirements.txt
-- Summary: Line 1: inserted 6 lines.
-- Before: 0 lines | 0 chars | hash empty
-- After: 6 lines | 75 chars | hash 34eeed94fe28 | preview: "mavsdk>=2.8.0 / pymavlink>=2.4.41 / pyserial>=3.5 / rich>=13.0.0 / textual>=0.40.0"
-- Current fragment: "mavsdk>=2.8.0 / pymavlink>=2.4.41 / pyserial>=3.5 / rich>=13.0.0 / textual>=0.40.0"
-
+- No tracked changes recorded in this session yet.
 
 ## Hot Files
-- requirements.txt (1 tracked changes)
-- src/trajectory_engine.py (1 tracked changes)
+- No hotspots yet.
 
 ## Git Snapshot
 - Branch: master
-- HEAD: 2026-08-27 8a6b6b7 feat: implement drone ground station, trajectory engine, and deployment scripts for autonomous flight control
-- Working tree summary: 3 modifieds
-- M onboard_edge/flight_controller.py
-- M onboard_edge/mavlink_io.py
-- M onboard_edge/sensor_check.py
+- HEAD: 2026-08-27 c21c9d8 feat: implement MAVLink sensor discovery and navigation mode classification
+- Working tree summary: clean
+- Working tree: clean
 
 ## GitHub Snapshot
-GitHub Repository: Debanshu2005/Autonomous_Drone_IIT
-Description: IIT internship autonomous drone
-Visibility: public | Default branch: master
-Stars: 0 | Forks: 0 | Open issues: 0
-
-Latest commit on master:
-- 8a6b6b7 by Debanshu2005 on 2026-08-27
-  feat: implement drone ground station, trajectory engine, and deployment scripts for autonomous flight control
-
-URL: https://github.com/Debanshu2005/Autonomous_Drone_IIT
+GitHub context unavailable: GitHub API request failed with 404. Not Found Configure codeJanitor.github.apiToken or GITHUB_TOKEN if the repository is private or rate-limited.
 
 ## Graphify Snapshot
 Graphify report not found. Generate Graphify output if you want architecture-aware memory excerpts here.

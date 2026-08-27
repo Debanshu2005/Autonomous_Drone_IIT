@@ -56,6 +56,7 @@ def parse_targeted_command(cmd: str) -> tuple[Optional[int], str]:
 class EdgeBrain:
     def __init__(
         self,
+        drone_id: str = "drone1",
         serial_url: str | Sequence[str] = DEFAULT_CONNECTION_URL,
         host="0.0.0.0",
         port=5000,
@@ -64,6 +65,7 @@ class EdgeBrain:
             self.connection_urls = expand_connection_urls([serial_url])
         else:
             self.connection_urls = expand_connection_urls(serial_url)
+        self.drone_id = drone_id
         self.serial_url = ", ".join(self.connection_urls)
         self.host = host
         self.port = port
@@ -127,13 +129,13 @@ class EdgeBrain:
         self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_sock.bind((self.host, self.port))
         self.server_sock.listen(1)
-        LOGGER.info(f"Listening for ground station on {self.host}:{self.port}...")
+        LOGGER.info(f"[{self.drone_id}] Listening for ground station on {self.host}:{self.port}...")
         
         while not self._stop_event.is_set():
             try:
                 self.server_sock.settimeout(1.0)
                 client, addr = self.server_sock.accept()
-                LOGGER.info(f"Ground station connected from {addr}")
+                LOGGER.info(f"[{self.drone_id}] Ground station connected from {addr}")
                 with self._client_lock:
                     self.client_sock = client
                     self.client_connected = True
@@ -153,7 +155,7 @@ class EdgeBrain:
                         self.last_heartbeat_time = time.time()
                         if cmd == "__heartbeat__":
                             continue
-                        LOGGER.info(f"Received CMD: {cmd}")
+                        LOGGER.info(f"[{self.drone_id}] Received CMD: {cmd}")
                         asyncio.run_coroutine_threadsafe(self.process_command(cmd), loop)
                         self._send_client_line(f"ACK: {cmd}")
                         
@@ -167,6 +169,7 @@ class EdgeBrain:
                     if self.client_sock:
                         self.client_sock.close()
                         self.client_sock = None
+                    self.client_connected = False
 
     async def process_command(self, cmd: str):
         # Broadcast unless the laptop command starts with sysid:<id> or @<id>.
@@ -211,7 +214,7 @@ class EdgeBrain:
                 if self.client_sock:
                     self.client_sock.close()
                     self.client_sock = None
-
+                self.client_connected = False
     @staticmethod
     def _line_with_sysid(sysid: int, line: str) -> str:
         if line.startswith("[") and "] " in line:
@@ -254,7 +257,7 @@ class EdgeBrain:
         )
 
     async def start(self):
-        LOGGER.info(f"Connecting to Pixhawk v6x at {self.serial_url}...")
+        LOGGER.info(f"[{self.drone_id}] Connecting to Pixhawk v6x at {self.serial_url}...")
         await self.swarm.connect_all()
         
         if not self.swarm.connections:
@@ -326,6 +329,7 @@ class EdgeBrain:
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Raspberry Pi Edge Brain for Pixhawk v6x")
+    parser.add_argument("--drone-id", type=str, default="drone1", help="Drone ID (e.g. drone1)")
     parser.add_argument(
         "--connect",
         action="append",
@@ -340,7 +344,7 @@ async def main():
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     
-    brain = EdgeBrain(serial_url=expand_connection_urls(args.connect), host=args.host, port=args.port)
+    brain = EdgeBrain(drone_id=args.drone_id, serial_url=expand_connection_urls(args.connect), host=args.host, port=args.port)
     try:
         await brain.start()
     except KeyboardInterrupt:

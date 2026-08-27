@@ -737,6 +737,7 @@ def command_guide() -> str:
         "    forward/back/left/right/up/down: relative movement words\n"
         "    size / side: square side length in meters\n"
         "    passes: lawnmower search passes inside square\n"
+        "    passes: lawnmower search passes inside square\n"
         "    hover_s / seconds: hover duration in seconds\n"
     )
 
@@ -744,13 +745,13 @@ def command_guide() -> str:
 def _normalize_text(text: str) -> str:
     normalized = text.strip().lower()
     normalized = normalized.replace("take-off", "takeoff").replace("take off", "takeoff")
+    normalized = re.sub(r'\btakeof\b', 'takeoff', normalized)
     normalized = normalized.replace("secobds", "seconds").replace("secondes", "seconds")
     normalized = normalized.replace("circular", "circle")
     normalized = normalized.replace("figure eight", "figure-8").replace("figure 8", "figure-8")
     for word, value in _NUMBER_WORDS.items():
         normalized = re.sub(rf"\b{word}\b", str(value), normalized)
     return normalized
-
 
 _NUMBER_WORDS = {
     "zero": 0,

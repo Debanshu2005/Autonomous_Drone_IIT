@@ -12,6 +12,11 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import Footer, Input, RichLog, Static
 
+SWARM_FLEET = {
+    "drone1": ("127.0.0.1", 5001),
+    "drone2": ("127.0.0.1", 5002),
+    "drone3": ("127.0.0.1", 5003),
+}
 
 FIELD_PATTERNS = {
     "sysid": re.compile(r"\bSYSID[:=]\s*(\d+)", re.IGNORECASE),
@@ -27,9 +32,9 @@ FIELD_PATTERNS = {
     "gps": re.compile(r"\bGPS[:=]\s*\(([^)]+)\)", re.IGNORECASE),
 }
 
-
 @dataclass
 class TelemetryState:
+    node_id: str = ""
     sysid: int = 1
     mode: str = "--"
     armed: Optional[bool] = None
@@ -42,7 +47,7 @@ class TelemetryState:
 
 
 class GroundStationApp(App[None]):
-    """Interactive TCP client for the Raspberry Pi Edge Brain."""
+    """Interactive TCP Swarm Client using Textual."""
 
     BINDINGS = [
         ("ctrl+c", "quit", "Quit"),
@@ -79,13 +84,11 @@ class GroundStationApp(App[None]):
     }
     """
 
-    def __init__(self, host: str, port: int) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.host = host
-        self.port = port
-        self.telemetry: dict[int, TelemetryState] = {}
-        self.connected = False
-        self._sock: Optional[socket.socket] = None
+        self.telemetry: dict[str, TelemetryState] = {}
+        self.connected_nodes: dict[str, bool] = {node: False for node in SWARM_FLEET}
+        self.sockets: dict[str, socket.socket] = {}
         self._sock_lock = threading.Lock()
         self._stop_event = threading.Event()
 
@@ -99,7 +102,7 @@ class GroundStationApp(App[None]):
             auto_scroll=True,
         )
         self.command_input = Input(
-            placeholder="[CMD] >",
+            placeholder="[CMD] (e.g. 'all: takeoff 5' or 'drone2: rtl') >",
             id="command-input",
             select_on_focus=False,
         )
@@ -111,40 +114,43 @@ class GroundStationApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.title = "Autonomous Drone IIT"
-        self.sub_title = f"Edge Brain {self.host}:{self.port}"
+        self.title = "Autonomous Drone Swarm IIT"
+        self.sub_title = "Swarm Command Center"
         self.set_interval(0.25, self.refresh_header)
         self.command_input.focus()
-        self.system_log(f"[STATUS] Connecting to Edge Brain at {self.host}:{self.port}...")
-        threading.Thread(target=self._socket_worker, daemon=True).start()
+        
+        for node, (ip, port) in SWARM_FLEET.items():
+            self.telemetry[node] = TelemetryState(node_id=node)
+            self.system_log(f"[STATUS] Connecting to {node} at {ip}:{port}...")
+            threading.Thread(target=self._socket_worker, args=(node, ip, port), daemon=True).start()
+            
         threading.Thread(target=self._heartbeat_worker, daemon=True).start()
 
     def on_unmount(self) -> None:
         self._stop_event.set()
         with self._sock_lock:
-            if self._sock is not None:
+            for sock in self.sockets.values():
                 try:
-                    self._sock.shutdown(socket.SHUT_RDWR)
+                    sock.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
-                self._sock.close()
-                self._sock = None
+                sock.close()
+            self.sockets.clear()
 
     def refresh_header(self) -> None:
-        if not self.telemetry:
-            status = "[bold green]ONLINE[/bold green]" if self.connected else "[bold red]OFFLINE[/bold red]"
-            self.header.update(f"{status} | [bold cyan]MODE:[/bold cyan] -- | [bold cyan]ALT:[/bold cyan] -- | [bold cyan]NAV:[/bold cyan] -- | [bold cyan]POS:[/bold cyan] --")
-            return
-
         rows = []
-        for sysid in sorted(self.telemetry):
-            state = self.telemetry[sysid]
+        for node in sorted(SWARM_FLEET.keys()):
+            state = self.telemetry.get(node, TelemetryState(node_id=node))
+            is_connected = self.connected_nodes.get(node, False)
+            status_color = "bold green" if is_connected else "bold red"
+            
             armed = self._armed_markup(state.armed)
             battery = self._battery_markup(state)
             altitude = "--" if state.altitude_m is None else f"{state.altitude_m:.1f}m"
             pos = state.position if state.position != "--" else state.gps
+            
             rows.append(
-                f"[bold yellow]SYSID:{state.sysid}[/bold yellow] | "
+                f"[{status_color}]{node.upper()}[/{status_color}] | "
                 f"[bold cyan]MODE:[/bold cyan] {self._escape(state.mode)} | "
                 f"{armed} | {battery} | "
                 f"[bold cyan]ALT:[/bold cyan] {altitude} | "
@@ -154,80 +160,111 @@ class GroundStationApp(App[None]):
         self.header.update("\n".join(rows))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        command = event.value.strip()
+        user_input = event.value.strip()
         self.command_input.value = ""
-        if not command:
+        if not user_input:
             return
 
-        if command.lower() in {"quit", "exit"}:
+        if user_input.lower() in {"quit", "exit"}:
             self.exit()
             return
 
-        self.system_log(f"[CMD] {command}")
-        try:
-            with self._sock_lock:
-                if self._sock is None:
-                    raise ConnectionError("not connected")
-                self._sock.sendall(f"{command}\n".encode("utf-8"))
-        except Exception as exc:
-            self.system_log(f"[ERROR] Failed to send command: {exc}")
+        if ":" not in user_input:
+            self.system_log("[ERROR] Invalid syntax. Use <target>: <command>")
+            return
+            
+        target, command = user_input.split(":", 1)
+        target = target.strip()
+        command = command.strip()
+        
+        if not command:
+            self.system_log("[ERROR] Command cannot be empty.")
+            return
 
-    def _socket_worker(self) -> None:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(8.0)
-            sock.connect((self.host, self.port))
-            sock.settimeout(1.0)
-            with self._sock_lock:
-                self._sock = sock
-            self.call_from_thread(self._set_connected, True)
-            self.call_from_thread(self.system_log, "[SUCCESS] Connected to Edge Brain.")
+        self.system_log(f"[CMD] {user_input}")
+        
+        targets = []
+        if target == "all":
+            targets = list(SWARM_FLEET.keys())
+        elif target in SWARM_FLEET:
+            targets = [target]
+        else:
+            self.system_log(f"[ERROR] Unknown target '{target}'.")
+            return
+            
+        for node in targets:
+            try:
+                with self._sock_lock:
+                    sock = self.sockets.get(node)
+                    if sock is None:
+                        raise ConnectionError("not connected")
+                    sock.sendall(f"{command}\n".encode("utf-8"))
+            except Exception as exc:
+                self.system_log(f"[ERROR] Failed to send command to {node}: {exc}")
 
-            buffer = ""
-            while not self._stop_event.is_set():
-                try:
-                    chunk = sock.recv(4096)
-                except socket.timeout:
-                    continue
-                if not chunk:
-                    break
-                buffer += chunk.decode("utf-8", errors="replace")
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    self.call_from_thread(self._handle_server_line, line.strip())
-            if buffer.strip():
-                self.call_from_thread(self._handle_server_line, buffer.strip())
-        except Exception as exc:
-            self.call_from_thread(self.system_log, f"[ERROR] Connection failed: {exc}")
-        finally:
-            with self._sock_lock:
-                if self._sock is not None:
-                    self._sock.close()
-                    self._sock = None
-            self.call_from_thread(self._set_connected, False)
-            self.call_from_thread(self.system_log, "[STATUS] Disconnected.")
+    def _socket_worker(self, node: str, ip: str, port: int) -> None:
+        while not self._stop_event.is_set():
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(8.0)
+                sock.connect((ip, port))
+                sock.settimeout(1.0)
+                with self._sock_lock:
+                    self.sockets[node] = sock
+                self.call_from_thread(self._set_connected, node, True)
+                self.call_from_thread(self.system_log, f"[SUCCESS] {node} connected.")
+
+                buffer = ""
+                while not self._stop_event.is_set():
+                    try:
+                        chunk = sock.recv(4096)
+                    except socket.timeout:
+                        continue
+                    if not chunk:
+                        break
+                    buffer += chunk.decode("utf-8", errors="replace")
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        self.call_from_thread(self._handle_server_line, node, line.strip())
+                if buffer.strip():
+                    self.call_from_thread(self._handle_server_line, node, buffer.strip())
+            except Exception as exc:
+                if not self._stop_event.is_set():
+                    self.call_from_thread(self.system_log, f"[ERROR] {node} connection failed: {exc}")
+            finally:
+                with self._sock_lock:
+                    if node in self.sockets:
+                        self.sockets[node].close()
+                        del self.sockets[node]
+                self.call_from_thread(self._set_connected, node, False)
+                if not self._stop_event.is_set():
+                    self.call_from_thread(self.system_log, f"[STATUS] {node} disconnected. Retrying in 2s...")
+                    time.sleep(2.0)
 
     def _heartbeat_worker(self) -> None:
         while not self._stop_event.is_set():
             time.sleep(1.0)
-            try:
-                with self._sock_lock:
-                    if self._sock is not None:
-                        self._sock.sendall(b"__heartbeat__\n")
-            except Exception:
-                pass
+            with self._sock_lock:
+                for node, sock in list(self.sockets.items()):
+                    try:
+                        sock.sendall(b"__heartbeat__\n")
+                    except Exception:
+                        pass
 
-    def _handle_server_line(self, line: str) -> None:
+    def _handle_server_line(self, node: str, line: str) -> None:
         if not line:
             return
         if line.startswith("[TELEM]"):
-            self._update_telemetry(line)
-        self.system_log(self._normalize_line(line))
+            self._update_telemetry(node, line)
+        else:
+            self.system_log(self._normalize_line(f"[{node}] {line}"))
 
-    def _update_telemetry(self, line: str) -> None:
+    def _update_telemetry(self, node: str, line: str) -> None:
+        state = self.telemetry.get(node, TelemetryState(node_id=node))
+
         sysid_match = FIELD_PATTERNS["sysid"].search(line)
-        sysid = int(sysid_match.group(1)) if sysid_match else 1
-        state = self.telemetry.get(sysid, TelemetryState(sysid=sysid))
+        if sysid_match:
+            state.sysid = int(sysid_match.group(1))
 
         mode_match = FIELD_PATTERNS["mode"].search(line)
         if mode_match:
@@ -261,33 +298,33 @@ class GroundStationApp(App[None]):
             if state.nav == "--":
                 state.nav = "GPS"
 
-        self.telemetry[sysid] = state
+        self.telemetry[node] = state
 
-    def _set_connected(self, value: bool) -> None:
-        self.connected = value
+    def _set_connected(self, node: str, value: bool) -> None:
+        self.connected_nodes[node] = value
 
     def system_log(self, line: str) -> None:
         text = Text.from_markup(line)
         plain = text.plain
-        if plain.startswith("[SUCCESS]"):
+        if "[SUCCESS]" in plain:
             text.stylize("bold green")
-        elif plain.startswith("[TELEM]"):
+        elif "[TELEM]" in plain:
             text.stylize("green")
-        elif plain.startswith("[STATUS]"):
+        elif "[STATUS]" in plain:
             text.stylize("yellow")
-        elif plain.startswith("[CRITICAL]") or plain.startswith("[ERROR]"):
+        elif "[CRITICAL]" in plain or "[ERROR]" in plain:
             text.stylize("bold red")
-        elif plain.startswith("[EXEC]"):
+        elif "[EXEC]" in plain:
             text.stylize("bold cyan")
-        elif plain.startswith("[CMD]"):
+        elif "[CMD]" in plain:
             text.stylize("bold white")
-        elif plain.startswith("ACK:"):
+        elif "ACK:" in plain:
             text.stylize("dim green")
         self.log_widget.write(text)
 
     @staticmethod
     def _normalize_line(line: str) -> str:
-        if line.startswith("ACK:"):
+        if "ACK:" in line and "[SUCCESS]" not in line:
             return f"[SUCCESS] {line}"
         return line
 
@@ -316,16 +353,8 @@ class GroundStationApp(App[None]):
         return value.replace("[", "\\[").replace("]", "\\]")
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Textual laptop client for the Raspberry Pi Edge Brain.")
-    parser.add_argument("host", nargs="?", default="192.168.4.1", help="Edge Brain host/IP address.")
-    parser.add_argument("--port", type=int, default=5000, help="Edge Brain TCP command port.")
-    return parser.parse_args()
-
-
 def main() -> None:
-    args = parse_args()
-    GroundStationApp(args.host, args.port).run()
+    GroundStationApp().run()
 
 
 if __name__ == "__main__":

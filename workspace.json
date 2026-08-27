@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-27T15:26:33.218Z",
-  "generatedAtEpochMs": 1787844393218,
+  "generatedAt": "2026-08-27T15:29:41.781Z",
+  "generatedAtEpochMs": 1787844581781,
   "generator": {
     "name": "Code Janitor",
     "feature": "workspace-memory"
@@ -14,7 +14,7 @@
   "workspace": {
     "name": "Autonomous_Drone_IIT",
     "root": "d:\\CityGrid\\my-project\\Autonomous_Drone_IIT",
-    "activeFile": "onboard_edge/trajectory_engine.py",
+    "activeFile": "ground_station/laptop_client.py",
     "refreshReason": "startup",
     "outputFiles": {
       "markdown": "graphify-out/WORKSPACE_MEMORY.md",
@@ -22,9 +22,7 @@
       "structuredManifest": "workspace.json"
     },
     "suggestedStartingPoints": [
-      "onboard_edge/trajectory_engine.py",
-      "requirements.txt",
-      "src/trajectory_engine.py",
+      "ground_station/laptop_client.py",
       ".gitignore",
       "README.md"
     ],
@@ -245,119 +243,31 @@
     "error": "package.json was not found."
   },
   "currentStack": {
-    "lastActivityAt": "2026-08-27T11:07:38.271Z",
-    "trackedChangeCount": 2,
-    "trackedFileSnapshotCount": 2,
+    "lastActivityAt": "",
+    "trackedChangeCount": 0,
+    "trackedFileSnapshotCount": 0,
     "changeTypeCounts": {
-      "save": 2,
+      "save": 0,
       "create": 0,
       "delete": 0,
       "rename": 0
     }
   },
-  "trackedSnapshots": [
-    {
-      "filePath": "src/trajectory_engine.py",
-      "updatedAt": 1787828858271,
-      "lineCount": 676,
-      "charCount": 23042,
-      "hash": "dd0e86f684b0",
-      "preview": "\"\"\" / Natural-language command parsing and NED/global waypoint generation. / All local geometry is expressed in NED convention: / - x / north is positive forward toward geographic north. / - y / east is positive towar..."
-    },
-    {
-      "filePath": "requirements.txt",
-      "updatedAt": 1787824397943,
-      "lineCount": 6,
-      "charCount": 75,
-      "hash": "34eeed94fe28",
-      "preview": "mavsdk>=2.8.0 / pymavlink>=2.4.41 / pyserial>=3.5 / rich>=13.0.0 / textual>=0.40.0"
-    }
-  ],
-  "recentChanges": [
-    {
-      "type": "save",
-      "path": "src/trajectory_engine.py",
-      "toPath": "",
-      "summary": "Saved without a textual diff.",
-      "recordedAt": "2026-08-27T11:07:38.271Z",
-      "recordedAtEpochMs": 1787828858271,
-      "before": {
-        "kind": "text",
-        "lineCount": 676,
-        "charCount": 23042,
-        "hash": "dd0e86f684b0",
-        "preview": "\"\"\" / Natural-language command parsing and NED/global waypoint generation. / All local geometry is expressed in NED convention: / - x / north is positive forward toward geographic north. / - y / east is positive towar...",
-        "updatedAt": 1787828858271
-      },
-      "after": {
-        "kind": "text",
-        "lineCount": 676,
-        "charCount": 23042,
-        "hash": "dd0e86f684b0",
-        "preview": "\"\"\" / Natural-language command parsing and NED/global waypoint generation. / All local geometry is expressed in NED convention: / - x / north is positive forward toward geographic north. / - y / east is positive towar...",
-        "updatedAt": 1787828858271
-      },
-      "diff": null
-    },
-    {
-      "type": "save",
-      "path": "requirements.txt",
-      "toPath": "",
-      "summary": "Line 1: inserted 6 lines.",
-      "recordedAt": "2026-08-27T09:53:17.943Z",
-      "recordedAtEpochMs": 1787824397943,
-      "before": {
-        "kind": "text",
-        "lineCount": 0,
-        "charCount": 0,
-        "hash": "empty",
-        "preview": "",
-        "updatedAt": 1787824397941
-      },
-      "after": {
-        "kind": "text",
-        "lineCount": 6,
-        "charCount": 75,
-        "hash": "34eeed94fe28",
-        "preview": "mavsdk>=2.8.0 / pymavlink>=2.4.41 / pyserial>=3.5 / rich>=13.0.0 / textual>=0.40.0",
-        "updatedAt": 1787824397943
-      },
-      "diff": {
-        "lineStart": 1,
-        "removedLines": 0,
-        "addedLines": 6,
-        "summary": "Line 1: inserted 6 lines.",
-        "beforeFragment": "",
-        "afterFragment": "mavsdk>=2.8.0 / pymavlink>=2.4.41 / pyserial>=3.5 / rich>=13.0.0 / textual>=0.40.0"
-      }
-    }
-  ],
-  "hotFiles": [
-    {
-      "filePath": "requirements.txt",
-      "count": 1
-    },
-    {
-      "filePath": "src/trajectory_engine.py",
-      "count": 1
-    }
-  ],
+  "trackedSnapshots": [],
+  "recentChanges": [],
+  "hotFiles": [],
   "git": {
     "available": true,
     "branch": "master",
-    "headSummary": "2026-08-27 8a6b6b7 feat: implement drone ground station, trajectory engine, and deployment scripts for autonomous flight control",
-    "statusSummary": "3 modifieds",
-    "changedFileCount": 3,
-    "statusLines": [
-      "M onboard_edge/flight_controller.py",
-      "M onboard_edge/mavlink_io.py",
-      "M onboard_edge/sensor_check.py"
-    ],
+    "headSummary": "2026-08-27 c21c9d8 feat: implement MAVLink sensor discovery and navigation mode classification",
+    "statusSummary": "",
+    "changedFileCount": 0,
+    "statusLines": [],
     "error": ""
   },
   "github": {
-    "available": true,
-    "summary": "GitHub Repository: Debanshu2005/Autonomous_Drone_IIT\nDescription: IIT internship autonomous drone\nVisibility: public | Default branch: master\nStars: 0 | Forks: 0 | Open issues: 0\n\nLatest commit on master:\n- 8a6b6b7 by Debanshu2005 on 2026-08-27\n  feat: implement drone ground station, trajectory engine, and deployment scripts for autonomous flight control\n\nURL: https://github.com/Debanshu2005/Autonomous_Drone_IIT"
+    "available": false,
+    "summary": "GitHub API request failed with 404. Not Found Configure codeJanitor.github.apiToken or GITHUB_TOKEN if the repository is private or rate-limited."
   },
   "graphify": {
     "reportAvailable": false,
