@@ -144,7 +144,7 @@ def parse_mission(text: str) -> list[dict]:
     if has_takeoff:
         alt = kv_matches.get('h', kv_matches.get('altitude', kv_matches.get('height')))
         if alt is None:
-            alt_match = re.search(r'(?:takeoff|to)\s*(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters|kilometer|kilometers|centimeter|centimeters)\b', normalized)
+            alt_match = re.search(r'(?:takeoff|to|height of|altitude of|altitude|height)\s*(?:is\s*)?(\d+(?:\.\d+)?)\s*(cm|m|km|meter|meters|kilometer|kilometers|centimeter|centimeters)\b', normalized)
             if alt_match:
                 alt = _normalize_distance_m(float(alt_match.group(1)), alt_match.group(2))
         tasks.append({'task': 'TAKEOFF', 'alt': alt if alt is not None else 2.0})
@@ -540,6 +540,7 @@ def _normalize_text(text: str) -> str:
     normalized = text.strip().lower()
     normalized = normalized.replace("take-off", "takeoff").replace("take off", "takeoff")
     normalized = normalized.replace("secobds", "seconds").replace("secondes", "seconds")
+    normalized = normalized.replace("circular", "circle")
     for word, value in _NUMBER_WORDS.items():
         normalized = re.sub(rf"\b{word}\b", str(value), normalized)
     return normalized
