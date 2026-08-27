@@ -10,6 +10,8 @@ provides one.
 from __future__ import annotations
 
 import asyncio
+import json
+import glob
 import logging
 import time
 from dataclasses import dataclass
@@ -47,8 +49,7 @@ def parse_connection_url(url: str) -> ConnectionSpec:
     if url.startswith("serial://"):
         target = url.removeprefix("serial://")
         device, baud = _split_device_and_baud(target)
-        if device == "auto":
-            device = autodetect_usb_serial_device()
+        # Pass 'auto' through to connect() for the new handshake logic
         return ConnectionSpec(device=device, baud=baud, is_serial=True)
 
     if url.startswith("udpin://"):
@@ -76,26 +77,76 @@ def _split_device_and_baud(target: str) -> tuple[str, int]:
     return device, baud
 
 
-def autodetect_usb_serial_device() -> str:
-    dev_dir = Path("/dev")
-    devices: list[str] = []
-    for pattern in USB_SERIAL_PATTERNS:
-        devices.extend(str(path) for path in dev_dir.glob(pattern) if path.exists())
+def autodetect_pixhawk_connection(
+    source_system: int = 255, 
+    source_component: int = 191
+) -> Any:
+    config_file = Path("config.json")
+    
+    # 1. Local Config Caching
+    if config_file.exists():
+        try:
+            with open(config_file, "r") as f:
+                config = json.load(f)
+                cached_port = config.get("pixhawk_port")
+                cached_baud = config.get("pixhawk_baud", 921600)
+            
+            if cached_port:
+                LOGGER.info(f"Probing cached Pixhawk port: {cached_port} at {cached_baud} baud")
+                master = mavutil.mavlink_connection(
+                    cached_port, 
+                    baud=cached_baud, 
+                    source_system=source_system, 
+                    source_component=source_component,
+                    autoreconnect=True
+                )
+                # 2. Fast Cache Validation
+                msg = master.wait_heartbeat(blocking=True, timeout=2.0)
+                if msg and msg.get_srcSystem() == 1:
+                    LOGGER.info(f"Cache validation successful for {cached_port} at {cached_baud}")
+                    return master
+                else:
+                    LOGGER.warning("Cache validation failed, closing cached port.")
+                    master.close()
+        except Exception as e:
+            LOGGER.warning(f"Failed to read or validate cached config: {e}")
 
-    if not devices:
-        raise MavlinkError(
-            "no Pixhawk USB serial device found; use serial:///dev/ttyACM0:115200 "
-            "or the TELEM UART device explicitly"
-        )
-    devices = sorted(devices)
-    if len(devices) > 1:
-        acm_devices = [device for device in devices if Path(device).name.startswith("ttyACM")]
-        if len(acm_devices) == 1:
-            return acm_devices[0]
-        raise MavlinkError(
-            f"multiple serial devices found ({', '.join(devices)}); set --connect explicitly"
-        )
-    return devices[0]
+    # 3. Comprehensive Port Scanning
+    LOGGER.info("Scanning for Pixhawk connection...")
+    patterns = ["/dev/ttyAMA*", "/dev/ttyUSB*", "/dev/ttyACM*"]
+    ports = []
+    for p in patterns:
+        ports.extend(glob.glob(p))
+        
+    baud_rates = [921600, 115200, 57600]
+        
+    # 4. Handshake Verification (Nested Matrix Scan)
+    for port in ports:
+        for baud in baud_rates:
+            LOGGER.info(f"Probing {port} at {baud} baud...")
+            try:
+                master = mavutil.mavlink_connection(
+                    port, 
+                    baud=baud, 
+                    source_system=source_system, 
+                    source_component=source_component,
+                    autoreconnect=True
+                )
+                msg = master.wait_heartbeat(blocking=True, timeout=1.0)
+                if msg and msg.get_srcSystem() == 1:
+                    # 5. Auto-Save & Return
+                    LOGGER.info(f"Valid Pixhawk found at {port} with {baud} baud")
+                    try:
+                        with open(config_file, "w") as f:
+                            json.dump({"pixhawk_port": port, "pixhawk_baud": baud}, f)
+                    except Exception as e:
+                        LOGGER.warning(f"Could not save to config.json: {e}")
+                    return master
+                master.close()
+            except Exception as e:
+                LOGGER.debug(f"Failed to probe {port} at {baud}: {e}")
+            
+    raise ConnectionError("No responding Pixhawk flight controller found on any scanned serial ports or baud rates.")
 
 
 class MavlinkConnection:
@@ -122,18 +173,30 @@ class MavlinkConnection:
     async def connect(self, heartbeat_timeout_s: float = 30.0) -> None:
         spec = parse_connection_url(self.connection_url)
         LOGGER.info("Connecting to Pixhawk at %s", self.connection_url)
-        self.master = mavutil.mavlink_connection(
-            spec.device,
-            baud=spec.baud,
-            source_system=self.source_system,
-            source_component=self.source_component,
-            autoreconnect=True,
-        )
+        
+        if spec.device == "auto":
+            self.master = await asyncio.to_thread(
+                autodetect_pixhawk_connection,
+                self.source_system,
+                self.source_component
+            )
+            heartbeat = await asyncio.to_thread(
+                self.master.wait_heartbeat,
+                timeout=2.0,
+            )
+        else:
+            self.master = mavutil.mavlink_connection(
+                spec.device,
+                baud=spec.baud,
+                source_system=self.source_system,
+                source_component=self.source_component,
+                autoreconnect=True,
+            )
+            heartbeat = await asyncio.to_thread(
+                self.master.wait_heartbeat,
+                timeout=heartbeat_timeout_s,
+            )
 
-        heartbeat = await asyncio.to_thread(
-            self.master.wait_heartbeat,
-            timeout=heartbeat_timeout_s,
-        )
         if heartbeat is None:
             raise MavlinkError(f"no heartbeat from Pixhawk within {heartbeat_timeout_s:.0f}s")
 
