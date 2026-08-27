@@ -320,16 +320,16 @@ class FlightController:
             if local is not None:
                 _, _, down_m = local
                 current_alt_m = -down_m
-                error_m = target_altitude_m - current_alt_m
+                error_m = abs(target_altitude_m - current_alt_m)
                 self._emit(
                     "EXEC",
                     f"Executing TAKEOFF to {target_altitude_m:.1f}m | "
                     f"Current Alt: {current_alt_m:.1f}m | Error: {error_m:.1f}m",
                 )
-                if abs(error_m) <= self.config.waypoint_acceptance_radius_m:
+                if error_m <= 0.2:
+                    self._emit("STATUS", "Takeoff altitude reached.")
                     return
-                self.mavlink.send_local_position_target(local[0], local[1], -target_altitude_m)
-            await asyncio.sleep(1.0 / self.config.setpoint_rate_hz)
+            await asyncio.sleep(0.1)
         raise FlightAbort(f"takeoff altitude {target_altitude_m:.1f}m was not reached")
 
     async def _hold_for(self, duration_s: float) -> None:
@@ -337,17 +337,21 @@ class FlightController:
         if duration_s <= 0:
             return
         LOGGER.info("Hovering for %.1fs", duration_s)
-        deadline = time.monotonic() + duration_s
+        
+        # 1. SEND EXACTLY ONCE
         hold_position = self._current_local_position()
+        if hold_position is not None:
+            self.mavlink.send_local_position_target(*hold_position)
+        else:
+            self.mavlink.send_body_velocity_target(0.0, 0.0, 0.0)
+            
+        # 2. PASSIVE MONITORING LOOP
+        deadline = time.monotonic() + duration_s
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
             remaining_s = max(0.0, deadline - time.monotonic())
             self._emit("EXEC", f"Executing HOVER | Time remaining: {remaining_s:.1f}s")
-            if hold_position is not None:
-                self.mavlink.send_local_position_target(*hold_position)
-            else:
-                self.mavlink.send_body_velocity_target(0.0, 0.0, 0.0)
-            await asyncio.sleep(1.0 / self.config.setpoint_rate_hz)
+            await asyncio.sleep(0.1)
 
     async def _fly_local_target(self, target: LocalTarget) -> None:
         LOGGER.info(
@@ -357,15 +361,18 @@ class FlightController:
             target.east_m,
             target.down_m,
         )
+        
+        # 1. SEND EXACTLY ONCE
+        self.mavlink.send_local_position_target(
+            target.north_m,
+            target.east_m,
+            target.down_m,
+            yaw_rad=_yaw_rad(target.yaw_deg),
+        )
+        
         deadline = time.monotonic() + self.config.waypoint_timeout_s
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
-            self.mavlink.send_local_position_target(
-                target.north_m,
-                target.east_m,
-                target.down_m,
-                yaw_rad=_yaw_rad(target.yaw_deg),
-            )
             local = self._current_local_position()
             if local is not None:
                 distance = local_distance_m(target, *local)
@@ -374,11 +381,11 @@ class FlightController:
                     f"Executing {target.name} | Current POS: "
                     f"({local[0]:.1f},{local[1]:.1f},{local[2]:.1f}) | Error: {distance:.1f}m",
                 )
-                if distance <= self.config.waypoint_acceptance_radius_m:
+                if distance <= max(0.2, self.config.waypoint_acceptance_radius_m):
                     if target.hold_s > 0:
                         await asyncio.sleep(target.hold_s)
                     return
-            await asyncio.sleep(1.0 / self.config.setpoint_rate_hz)
+            await asyncio.sleep(0.1)
         raise FlightAbort(f"local waypoint {target.name} timed out")
 
     async def _fly_global_target(self, target: GlobalTarget) -> None:
@@ -389,15 +396,18 @@ class FlightController:
             target.lon_deg,
             target.relative_alt_m,
         )
+        
+        # 1. SEND EXACTLY ONCE
+        self.mavlink.send_global_position_target(
+            target.lat_deg,
+            target.lon_deg,
+            target.relative_alt_m,
+            yaw_rad=_yaw_rad(target.yaw_deg),
+        )
+        
         deadline = time.monotonic() + self.config.waypoint_timeout_s
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
-            self.mavlink.send_global_position_target(
-                target.lat_deg,
-                target.lon_deg,
-                target.relative_alt_m,
-                yaw_rad=_yaw_rad(target.yaw_deg),
-            )
             global_position = self._current_global_position()
             if global_position is not None:
                 lat, lon, relative_alt = global_position
@@ -408,11 +418,11 @@ class FlightController:
                     f"Executing {target.name} | Current Alt: {relative_alt:.1f}m | "
                     f"Horizontal Error: {horizontal_error:.1f}m | Vertical Error: {vertical_error:.1f}m",
                 )
-                if max(horizontal_error, vertical_error) <= self.config.waypoint_acceptance_radius_m:
+                if max(horizontal_error, vertical_error) <= max(0.2, self.config.waypoint_acceptance_radius_m):
                     if target.hold_s > 0:
                         await asyncio.sleep(target.hold_s)
                     return
-            await asyncio.sleep(1.0 / self.config.setpoint_rate_hz)
+            await asyncio.sleep(0.1)
         raise FlightAbort(f"global waypoint {target.name} timed out")
 
     async def _watchdog_loop(self) -> None:
@@ -478,7 +488,7 @@ class FlightController:
             if not armed or (altitude_m is not None and altitude_m <= 0.2):
                 self._emit("STATUS", "Sequence complete. Drone landed or disarmed.")
                 return
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.1)
         self._emit("STATUS", "LAND command sent; landed/disarmed confirmation timed out.")
 
 
