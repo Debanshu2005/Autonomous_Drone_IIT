@@ -1,3 +1,4 @@
 mavsdk>=2.8.0
 pymavlink>=2.4.41
 pyserial>=3.5
+rich>=13.0.0
