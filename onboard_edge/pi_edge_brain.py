@@ -323,6 +323,22 @@ class EdgeBrain:
                 self.client_sock = None
         if self.server_sock:
             self.server_sock.close()
+        
+        # Issue RTL to all connected drones before shutting down
+        LOGGER.info("Issuing RTL to all drones before shutting down...")
+        import asyncio
+        rtl_tasks = []
+        for sysid, conn in self.swarm.connections.items():
+            try:
+                rtl_tasks.append(conn.rtl())
+            except Exception as e:
+                LOGGER.error(f"Failed to issue RTL to {sysid}: {e}")
+        if rtl_tasks:
+            # Wait up to 3 seconds for RTL commands to be sent
+            done, pending = await asyncio.wait(rtl_tasks, timeout=3.0)
+            if pending:
+                LOGGER.warning("Some RTL commands did not complete in time.")
+
         await self.swarm.close_all()
 
 
@@ -347,7 +363,9 @@ async def main():
     brain = EdgeBrain(drone_id=args.drone_id, serial_url=expand_connection_urls(args.connect), host=args.host, port=args.port)
     try:
         await brain.start()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
         await brain.stop()
 
 if __name__ == "__main__":

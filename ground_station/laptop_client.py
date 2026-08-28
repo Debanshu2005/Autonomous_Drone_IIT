@@ -129,7 +129,12 @@ class GroundStationApp(App[None]):
     def on_unmount(self) -> None:
         self._stop_event.set()
         with self._sock_lock:
-            for sock in self.sockets.values():
+            for node, sock in list(self.sockets.items()):
+                try:
+                    # Automatically command RTL to the drone if the ground station is closed
+                    sock.sendall(b"rtl\n")
+                except Exception:
+                    pass
                 try:
                     sock.shutdown(socket.SHUT_RDWR)
                 except OSError:
