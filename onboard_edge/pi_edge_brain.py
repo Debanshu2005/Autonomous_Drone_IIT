@@ -330,7 +330,7 @@ class EdgeBrain:
         rtl_tasks = []
         for sysid, conn in self.swarm.connections.items():
             try:
-                rtl_tasks.append(conn.rtl())
+                rtl_tasks.append(asyncio.create_task(conn.rtl()))
             except Exception as e:
                 LOGGER.error(f"Failed to issue RTL to {sysid}: {e}")
         if rtl_tasks:
