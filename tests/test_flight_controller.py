@@ -167,8 +167,9 @@ async def test_failsafe_battery_debounce(mock_mavlink, mock_sensors):
 
 @pytest.mark.asyncio
 async def test_failsafe_hotspot_geofence(mock_mavlink, mock_sensors):
-    config = FlightControllerConfig()
-    config.hotspot = HotspotContainmentConfig(enabled=True, max_radius_m=10.0, expected_peer_ids=[])
+    config = FlightControllerConfig(
+        hotspot=HotspotContainmentConfig(enabled=True, max_radius_m=10.0, expected_peer_ids=[])
+    )
     fc = FlightController(mock_mavlink, mock_sensors, config)
     
     # Startup position
@@ -188,12 +189,13 @@ async def test_failsafe_hotspot_geofence(mock_mavlink, mock_sensors):
 
 @pytest.mark.asyncio
 async def test_hardware_check_missing_peers(mock_mavlink, mock_sensors):
-    config = FlightControllerConfig()
-    config.hotspot = HotspotContainmentConfig(
-        enabled=True, 
-        network_watchdog_enabled=True, 
-        require_peers_before_arm=True,
-        expected_peer_ids=["drone-2"]
+    config = FlightControllerConfig(
+        hotspot=HotspotContainmentConfig(
+            enabled=True, 
+            network_watchdog_enabled=True, 
+            require_peers_before_arm=True,
+            expected_peer_ids=["drone-2"]
+        )
     )
     
     peer_link = MagicMock()

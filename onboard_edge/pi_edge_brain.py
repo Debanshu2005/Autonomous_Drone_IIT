@@ -185,6 +185,12 @@ class EdgeBrain:
                 buffer = ""
                 authenticated = False if auth_token else True
                 
+                if authenticated:
+                    with self._client_lock:
+                        self.client_sock = client
+                        self.client_connected = True
+                        self.last_heartbeat_time = time.time()
+                
                 while not self._stop_event.is_set():
                     data = client.recv(1024)
                     if not data:
@@ -210,12 +216,6 @@ class EdgeBrain:
                                 LOGGER.warning(f"[{self.drone_id}] Authentication failed from {addr}. Rejecting.")
                                 client.close()
                                 break
-                        else:
-                            if not self.client_connected:
-                                with self._client_lock:
-                                    self.client_sock = client
-                                    self.client_connected = True
-                                    self.last_heartbeat_time = time.time()
                                     
                         self.last_heartbeat_time = time.time()
                         if cmd == "__heartbeat__":
