@@ -12,18 +12,20 @@ ONBOARD_EDGE = ROOT / "onboard_edge"
 if str(ONBOARD_EDGE) not in sys.path:
     sys.path.insert(0, str(ONBOARD_EDGE))
 
-from ground_station.laptop_client import GroundStationApp
+from ground_station.laptop_client import GroundStationApp, TelemetryState
 from pi_edge_brain import expand_connection_urls, parse_targeted_command
 
 
 class GroundStationTests(unittest.TestCase):
     def test_laptop_client_parses_rich_telemetry(self) -> None:
-        app = GroundStationApp("127.0.0.1", 5000)
+        app = GroundStationApp()
+        app.telemetry["drone2"] = TelemetryState(node_id="drone2")
         app._update_telemetry(
+            "drone2",
             "[TELEM] SYSID:2 MODE:GUIDED | ARMED:true | BAT: 72% (12.60V) | "
             "ALT:3.1m | NAV:GPS | POS:(1.0, 2.0, -3.1) | GPS:(12.0, 77.0)"
         )
-        state = app.telemetry[2]
+        state = app.telemetry["drone2"]
         self.assertEqual(state.mode, "GUIDED")
         self.assertTrue(state.armed)
         self.assertEqual(state.battery_percent, 72.0)

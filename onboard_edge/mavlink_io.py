@@ -101,13 +101,13 @@ def autodetect_pixhawk_connection(
                     autoreconnect=True
                 )
                 # 2. Fast Cache Validation
-                msg = master.wait_heartbeat(blocking=True, timeout=2.0)
+                msg = master.wait_heartbeat(blocking=True, timeout=2.0)  # type: ignore
                 if msg and msg.get_srcSystem() > 0:
                     LOGGER.info(f"Cache validation successful for {cached_port} at {cached_baud}")
                     return master
                 else:
                     LOGGER.warning("Cache validation failed, closing cached port.")
-                    master.close()
+                    master.close()  # type: ignore
         except Exception as e:
             LOGGER.warning(f"Failed to read or validate cached config: {e}")
 
@@ -132,7 +132,7 @@ def autodetect_pixhawk_connection(
                     source_component=source_component,
                     autoreconnect=True
                 )
-                msg = master.wait_heartbeat(blocking=True, timeout=1.0)
+                msg = master.wait_heartbeat(blocking=True, timeout=1.0)  # type: ignore
                 if msg and msg.get_srcSystem() > 0:
                     # 5. Auto-Save & Return
                     LOGGER.info(f"Valid Pixhawk found at {port} with {baud} baud")
@@ -142,7 +142,7 @@ def autodetect_pixhawk_connection(
                     except Exception as e:
                         LOGGER.warning(f"Could not save to config.json: {e}")
                     return master
-                master.close()
+                master.close()  # type: ignore
             except Exception as e:
                 LOGGER.debug(f"Failed to probe {port} at {baud}: {e}")
             

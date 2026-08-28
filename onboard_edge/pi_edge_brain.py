@@ -73,6 +73,19 @@ class EdgeBrain:
         self.sensors_map = {}
         self.controllers = {}
         
+        self._queues = {}
+        self._active_tasks = {}
+        
+        from hotspot import HotspotContainmentConfig, PeerLink
+        import os
+        hotspot_enabled = os.environ.get("EDGE_BRAIN_HOTSPOT_ENABLED", "0") == "1"
+        self.hotspot_config = HotspotContainmentConfig(
+            enabled=hotspot_enabled,
+            network_watchdog_enabled=hotspot_enabled,
+            expected_peer_ids=["drone-2"] if hotspot_enabled else [] # Example default for testing
+        )
+        self.peer_link = PeerLink(self.hotspot_config) if self.hotspot_config.network_watchdog_enabled else None
+        
         self.last_heartbeat_time = time.time()
         self.client_connected = False
         
@@ -124,6 +137,34 @@ class EdgeBrain:
         except Exception as exc:
             LOGGER.error(f"[SYSID:{sysid}] Sequence failed: {exc}")
 
+    async def _command_runner_loop(self, sysid: int) -> None:
+        while not self._stop_event.is_set():
+            try:
+                queue = self._queues.get(sysid)
+                if not queue:
+                    await asyncio.sleep(1.0)
+                    continue
+                    
+                sequence = await queue.get()
+                
+                # Run the sequence and track it
+                task = asyncio.create_task(self._execute_sequence(sysid, sequence))
+                self._active_tasks[sysid] = task
+                
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    LOGGER.info(f"[SYSID:{sysid}] Active task cancelled.")
+                except Exception as exc:
+                    LOGGER.error(f"[SYSID:{sysid}] Task error: {exc}")
+                finally:
+                    queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                LOGGER.error(f"Error in command runner loop for sysid {sysid}: {e}")
+                await asyncio.sleep(1.0)
+
     def _socket_listener(self, loop):
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -131,27 +172,51 @@ class EdgeBrain:
         self.server_sock.listen(1)
         LOGGER.info(f"[{self.drone_id}] Listening for ground station on {self.host}:{self.port}...")
         
+        import os
+        auth_token = os.environ.get("EDGE_BRAIN_AUTH_TOKEN")
+        if not auth_token:
+            LOGGER.warning("EDGE_BRAIN_AUTH_TOKEN is not set. The command socket will be unauthenticated.")
+        
         while not self._stop_event.is_set():
             try:
                 self.server_sock.settimeout(1.0)
                 client, addr = self.server_sock.accept()
                 LOGGER.info(f"[{self.drone_id}] Ground station connected from {addr}")
-                with self._client_lock:
-                    self.client_sock = client
-                    self.client_connected = True
-                    self.last_heartbeat_time = time.time()
                 buffer = ""
+                authenticated = False if auth_token else True
                 
                 while not self._stop_event.is_set():
                     data = client.recv(1024)
                     if not data:
                         break
                     buffer += data.decode("utf-8", errors="replace")
+                    
                     while "\n" in buffer:
                         line, buffer = buffer.split("\n", 1)
                         cmd = line.strip()
                         if not cmd:
                             continue
+                            
+                        if not authenticated:
+                            if cmd == f"AUTH:{auth_token}":
+                                authenticated = True
+                                LOGGER.info(f"[{self.drone_id}] Client authenticated successfully.")
+                                with self._client_lock:
+                                    self.client_sock = client
+                                    self.client_connected = True
+                                    self.last_heartbeat_time = time.time()
+                                continue
+                            else:
+                                LOGGER.warning(f"[{self.drone_id}] Authentication failed from {addr}. Rejecting.")
+                                client.close()
+                                break
+                        else:
+                            if not self.client_connected:
+                                with self._client_lock:
+                                    self.client_sock = client
+                                    self.client_connected = True
+                                    self.last_heartbeat_time = time.time()
+                                    
                         self.last_heartbeat_time = time.time()
                         if cmd == "__heartbeat__":
                             continue
@@ -193,7 +258,31 @@ class EdgeBrain:
                 f"[STATUS] Parsed command for {target_label}: queued {len(sequence.tasks)} task(s)."
             )
             for sysid in target_sysids:
-                asyncio.create_task(self._execute_sequence(sysid, sequence))
+                if not sequence.tasks:
+                    continue
+                
+                from trajectory_engine import TaskAction
+                task_action = sequence.tasks[0].action
+                
+                if task_action in {TaskAction.HOLD, TaskAction.LAND, TaskAction.RTL}:
+                    # Fast interrupt: clear queue and cancel active task
+                    if sysid in self._queues:
+                        while not self._queues[sysid].empty():
+                            try:
+                                self._queues[sysid].get_nowait()
+                                self._queues[sysid].task_done()
+                            except asyncio.QueueEmpty:
+                                break
+                    active = self._active_tasks.get(sysid)
+                    if active and not active.done():
+                        active.cancel()
+                    
+                    if sysid in self._queues:
+                        self._queues[sysid].put_nowait(sequence)
+                else:
+                    # Normal queueing
+                    if sysid in self._queues:
+                        self._queues[sysid].put_nowait(sequence)
         except Exception as e:
             msg = f"Command parse error: {e}"
             LOGGER.error(msg)
@@ -275,6 +364,9 @@ class EdgeBrain:
             await sensors.request_required_messages()
             self.sensors_map[sysid] = sensors
             
+            self._queues[sysid] = asyncio.Queue()
+            asyncio.create_task(self._command_runner_loop(sysid))
+            
             def status_sink(message: str, sysid=sysid) -> None:
                 line = self._line_with_sysid(sysid, message)
                 LOGGER.info(line)
@@ -292,10 +384,15 @@ class EdgeBrain:
                     critical_battery_voltage_v=0.0,
                     max_altitude_m=15.0,
                     final_action="hold",
+                    hotspot=self.hotspot_config,
                 ),
                 status_sink=status_sink,
+                peer_link=self.peer_link,
             )
             self.controllers[sysid] = controller
+
+        if self.peer_link:
+            await self.peer_link.start()
 
         await self.swarm.start_all()
         
@@ -327,6 +424,12 @@ class EdgeBrain:
         # Issue RTL to all connected drones before shutting down
         LOGGER.info("Issuing RTL to all drones before shutting down...")
         import asyncio
+        self._stop_event.set()
+        
+        peer_link = getattr(self, "peer_link", None)
+        if peer_link is not None:
+            await peer_link.stop()
+            
         rtl_tasks = []
         for sysid, conn in self.swarm.connections.items():
             try:
@@ -361,6 +464,24 @@ async def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     
     brain = EdgeBrain(drone_id=args.drone_id, serial_url=expand_connection_urls(args.connect), host=args.host, port=args.port)
+    
+    import signal
+    import sys
+    shutdown_count = 0
+    def handle_sigint(signum, frame):
+        nonlocal shutdown_count
+        shutdown_count += 1
+        if shutdown_count > 1:
+            LOGGER.error("CRITICAL: Hard abort initiated via double-tap Ctrl+C.")
+            sys.exit(1)
+        LOGGER.warning("SIGINT received. Initiating soft shutdown and RTL...")
+        raise KeyboardInterrupt()
+
+    try:
+        signal.signal(signal.SIGINT, handle_sigint)
+    except Exception:
+        pass
+
     try:
         await brain.start()
     except (KeyboardInterrupt, asyncio.CancelledError):

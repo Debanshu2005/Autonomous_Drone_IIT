@@ -214,6 +214,12 @@ class GroundStationApp(App[None]):
                 sock.settimeout(8.0)
                 sock.connect((ip, port))
                 sock.settimeout(1.0)
+                
+                import os
+                auth_token = os.environ.get("EDGE_BRAIN_AUTH_TOKEN")
+                if auth_token:
+                    sock.sendall(f"AUTH:{auth_token}\n".encode("utf-8"))
+                    
                 with self._sock_lock:
                     self.sockets[node] = sock
                 self.call_from_thread(self._set_connected, node, True)

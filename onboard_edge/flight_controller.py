@@ -30,6 +30,7 @@ from trajectory_engine import (
     global_distance_m,
     local_distance_m,
 )
+from hotspot import HotspotContainmentConfig, PeerLink
 
 
 LOGGER = logging.getLogger(__name__)
@@ -66,6 +67,8 @@ class FlightControllerConfig:
     takeoff_min_climb_m: float = 0.3
     takeoff_velocity_fallback_m_s: float = 0.6
     final_action: str = "hold"
+    battery_debounce_s: float = 1.5
+    hotspot: HotspotContainmentConfig = HotspotContainmentConfig()
 
 
 @dataclass(frozen=True)
@@ -81,14 +84,20 @@ class FlightController:
         sensors: SensorDiscovery,
         config: FlightControllerConfig = FlightControllerConfig(),
         status_sink: Optional[Callable[[str], None]] = None,
+        peer_link: Optional[PeerLink] = None,
     ) -> None:
         self.mavlink = mavlink
         self.sensors = sensors
         self.config = config
         self.status_sink = status_sink
+        self.peer_link = peer_link
         self.state = FlightState.IDLE
         self._watchdog_task: Optional[asyncio.Task[None]] = None
         self._failsafe_reason: Optional[str] = None
+        self._pause_reason: Optional[str] = None
+        self._battery_critical_start_s: Optional[float] = None
+        self._startup_global_position: Optional[tuple[float, float, float]] = None
+        self._startup_local_position: Optional[tuple[float, float, float]] = None
 
     async def execute_plan(self, task: ParsedTask, plan: TrajectoryPlan) -> None:
         if task.action == TaskAction.HOLD:
@@ -139,6 +148,8 @@ class FlightController:
                 await self.land("mission complete")
             else:
                 await self.hold()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             if self._vehicle_armed():
                 await self.land("autonomous task aborted")
@@ -280,6 +291,17 @@ class FlightController:
             raise FlightAbort("; ".join(report.reasons))
         if not report.battery.healthy:
             raise FlightAbort("battery telemetry is missing or below configured threshold")
+            
+        hotspot = self.config.hotspot
+        if hotspot.enabled and hotspot.network_watchdog_enabled and hotspot.require_peers_before_arm and hotspot.expected_peer_ids:
+            if not self.peer_link:
+                raise FlightAbort("hotspot containment is required but peer link is not active")
+            missing = self.peer_link.missing_peers()
+            if missing:
+                raise FlightAbort(f"required hotspot peers missing: {missing}")
+                
+        self._startup_global_position = self._current_global_position(allow_gps_fallback=True)
+        self._startup_local_position = self._current_local_position()
         return report
 
     async def _enter_guided_mode(self, mode: NavigationMode) -> None:
@@ -443,6 +465,13 @@ class FlightController:
         deadline = time.monotonic() + max(30.0, self.config.waypoint_timeout_s)
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
+            
+            if self._pause_reason:
+                self.mavlink.send_body_velocity_target(0.0, 0.0, 0.0)
+                deadline += interval_s
+                await asyncio.sleep(interval_s)
+                continue
+                
             if not self._vehicle_armed():
                 raise FlightAbort(
                     "vehicle disarmed during takeoff; check Mission Planner Messages for failsafe/pre-arm details"
@@ -482,6 +511,13 @@ class FlightController:
         deadline = time.monotonic() + duration_s
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
+            
+            if self._pause_reason:
+                self.mavlink.send_body_velocity_target(0.0, 0.0, 0.0)
+                deadline += interval_s
+                await asyncio.sleep(interval_s)
+                continue
+                
             if hold_position is not None:
                 self.mavlink.send_local_position_target(*hold_position)
             else:
@@ -503,6 +539,13 @@ class FlightController:
         deadline = time.monotonic() + self.config.waypoint_timeout_s
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
+            
+            if self._pause_reason:
+                self.mavlink.send_body_velocity_target(0.0, 0.0, 0.0)
+                deadline += interval_s
+                await asyncio.sleep(interval_s)
+                continue
+                
             self.mavlink.send_local_position_target(
                 target.north_m,
                 target.east_m,
@@ -537,6 +580,13 @@ class FlightController:
         deadline = time.monotonic() + self.config.waypoint_timeout_s
         while time.monotonic() < deadline:
             await self._raise_if_failsafe()
+            
+            if self._pause_reason:
+                self.mavlink.send_body_velocity_target(0.0, 0.0, 0.0)
+                deadline += interval_s
+                await asyncio.sleep(interval_s)
+                continue
+                
             self.mavlink.send_global_position_target(
                 target.lat_deg,
                 target.lon_deg,
@@ -580,15 +630,37 @@ class FlightController:
         if heartbeat is None or time.monotonic() - heartbeat.received_at_s > self.config.heartbeat_timeout_s:
             return "MAVLink heartbeat timeout"
 
-        battery = self.sensors.snapshot().battery
+        report = self.sensors.snapshot()
+        battery = report.battery
+        battery_critical = False
+        reason = None
+        
         if battery.remaining_percent is not None and battery.remaining_percent <= self.config.critical_battery_percent:
-            return f"critical battery {battery.remaining_percent:.0%}"
+            battery_critical = True
+            reason = f"critical battery {battery.remaining_percent:.0%}"
         if (
             self.config.critical_battery_voltage_v > 0
             and battery.voltage_v is not None
             and battery.voltage_v <= self.config.critical_battery_voltage_v
         ):
-            return f"critical battery voltage {battery.voltage_v:.2f}V"
+            battery_critical = True
+            reason = f"critical battery voltage {battery.voltage_v:.2f}V"
+
+        if battery_critical:
+            if self._battery_critical_start_s is None:
+                self._battery_critical_start_s = time.monotonic()
+            elif time.monotonic() - self._battery_critical_start_s >= self.config.battery_debounce_s:
+                return reason
+        else:
+            self._battery_critical_start_s = None
+            
+        if self.state == FlightState.TRAJECTORY_FOLLOW and report.mode == NavigationMode.MODE_A_GPS:
+            if getattr(report.gps, "fix_type", 3) < 3:
+                self._pause_reason = "GPS degraded"
+            else:
+                self._pause_reason = None
+        else:
+            self._pause_reason = None
 
         rc = self.mavlink.latest_message("RC_CHANNELS", 1.0)
         if rc is not None:
@@ -602,6 +674,32 @@ class FlightController:
             altitude_m = -local[2]
             if altitude_m > self.config.max_altitude_m:
                 return f"altitude limit exceeded ({altitude_m:.1f}m)"
+
+        hotspot = self.config.hotspot
+        if hotspot.enabled:
+            # Geofence check
+            if self._startup_local_position and local:
+                dist_m = local_distance_m(
+                    LocalTarget("", self._startup_local_position[0], self._startup_local_position[1], 0),
+                    local[0], local[1], 0
+                )
+                if dist_m > hotspot.max_radius_m:
+                    return f"hotspot geofence exceeded ({dist_m:.1f}m > {hotspot.max_radius_m}m)"
+            elif self._startup_global_position:
+                global_pos = self._current_global_position(allow_gps_fallback=True)
+                if global_pos:
+                    dist_m = global_distance_m(
+                        self._startup_global_position[0], self._startup_global_position[1],
+                        global_pos[0], global_pos[1]
+                    )
+                    if dist_m > hotspot.max_radius_m:
+                        return f"hotspot geofence exceeded ({dist_m:.1f}m > {hotspot.max_radius_m}m)"
+
+            # Network watchdog check
+            if hotspot.network_watchdog_enabled and hotspot.expected_peer_ids and self.peer_link:
+                missing = self.peer_link.missing_peers()
+                if missing:
+                    return f"hotspot peer heartbeat lost: {missing}"
 
         return None
 
@@ -643,10 +741,12 @@ class FlightController:
         msg = self.mavlink.latest_message("LOCAL_POSITION_NED", 1.5)
         if msg is None:
             return None
-        values = (getattr(msg, "x", None), getattr(msg, "y", None), getattr(msg, "z", None))
-        if any(value is None for value in values):
+        x = getattr(msg, "x", None)
+        y = getattr(msg, "y", None)
+        z = getattr(msg, "z", None)
+        if x is None or y is None or z is None:
             return None
-        north_m, east_m, down_m = (float(value) for value in values)
+        north_m, east_m, down_m = float(x), float(y), float(z)
         if not all(math.isfinite(value) for value in (north_m, east_m, down_m)):
             return None
         return north_m, east_m, down_m

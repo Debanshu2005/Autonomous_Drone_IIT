@@ -136,7 +136,9 @@ class TrajectoryPlan:
         return len(self.local_targets) if self.frame == TargetFrame.LOCAL_NED else len(self.global_targets)
 
 
-def _normalize_distance_m(value: float, unit: str) -> float:
+from typing import Optional
+
+def _normalize_distance_m(value: float, unit: Optional[str]) -> float:
     unit = (unit or "m").lower()
     if unit.startswith('c'):
         return value * 0.01
@@ -590,6 +592,8 @@ def _figure_8_targets(task: ParsedTask, origin: VehicleOrigin, altitude_m: float
 
 
 def _local_target_to_global(target: LocalTarget, origin: VehicleOrigin) -> GlobalTarget:
+    if origin.lat_deg is None or origin.lon_deg is None:
+        raise ValueError("Cannot convert local to global without origin GPS coordinates")
     origin_lat = float(origin.lat_deg)
     origin_lon = float(origin.lon_deg)
     delta_n = target.north_m - origin.local_north_m
