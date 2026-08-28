@@ -365,6 +365,35 @@ class GroundStationApp(App[None]):
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Autonomous Drone IIT Ground Station")
+    parser.add_argument("--fleet-config", type=str, help="Path to JSON file defining the swarm fleet (e.g. {\"drone1\": [\"127.0.0.1\", 5001]})")
+    parser.add_argument("--drone", action="append", help="Drone in format id=ip:port (e.g. drone1=127.0.0.1:5001)")
+    args = parser.parse_args()
+
+    global SWARM_FLEET
+    custom_fleet = {}
+    if args.fleet_config:
+        import json
+        try:
+            with open(args.fleet_config, 'r') as f:
+                data = json.load(f)
+                for k, v in data.items():
+                    custom_fleet[k] = (v[0], int(v[1]))
+        except Exception as e:
+            print(f"Error loading fleet config: {e}")
+            return
+            
+    if args.drone:
+        for d in args.drone:
+            if "=" in d and ":" in d:
+                node_id, rest = d.split("=", 1)
+                ip, port = rest.split(":", 1)
+                custom_fleet[node_id] = (ip, int(port))
+                
+    if custom_fleet:
+        SWARM_FLEET.clear()
+        SWARM_FLEET.update(custom_fleet)
+
     GroundStationApp().run()
 
 

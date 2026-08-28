@@ -43,6 +43,14 @@ class GroundStationTests(unittest.TestCase):
         self.assertEqual(parse_targeted_command("@3 takeoff 3m"), (3, "takeoff 3m"))
         self.assertEqual(parse_targeted_command("land"), (None, "land"))
 
+    @unittest.mock.patch('sys.argv', ['laptop_client.py', '--drone', 'd1=10.0.0.1:9000'])
+    @unittest.mock.patch('ground_station.laptop_client.GroundStationApp.run')
+    def test_laptop_client_custom_fleet(self, mock_run) -> None:
+        from ground_station.laptop_client import main, SWARM_FLEET
+        main()
+        self.assertIn("d1", SWARM_FLEET)
+        self.assertEqual(SWARM_FLEET["d1"], ("10.0.0.1", 9000))
+
 
 if __name__ == "__main__":
     unittest.main()

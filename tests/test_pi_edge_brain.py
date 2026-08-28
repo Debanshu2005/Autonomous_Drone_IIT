@@ -50,3 +50,12 @@ def test_unauthenticated_connection_starts_telemetry_immediately(monkeypatch):
         if brain.server_sock:
             brain.server_sock.close()
         listener_thread.join(timeout=1.0)
+
+def test_edge_brain_config_parsing():
+    # Test that EdgeBrain handles expected_peers correctly and passes to HotspotContainmentConfig
+    brain1 = EdgeBrain(drone_id="custom-drone-1")
+    assert brain1.hotspot_config.drone_id == "custom-drone-1"
+    assert brain1.hotspot_config.expected_peer_ids == []
+    
+    brain2 = EdgeBrain(drone_id="custom-drone-2", expected_peers=["peer1", "peer2"])
+    assert brain2.hotspot_config.expected_peer_ids == ["peer1", "peer2"]

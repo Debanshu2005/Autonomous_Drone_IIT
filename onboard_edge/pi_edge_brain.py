@@ -60,6 +60,7 @@ class EdgeBrain:
         serial_url: str | Sequence[str] = DEFAULT_CONNECTION_URL,
         host="0.0.0.0",
         port=5000,
+        expected_peers: Optional[list[str]] = None,
     ):
         if isinstance(serial_url, str):
             self.connection_urls = expand_connection_urls([serial_url])
@@ -80,9 +81,10 @@ class EdgeBrain:
         import os
         hotspot_enabled = os.environ.get("EDGE_BRAIN_HOTSPOT_ENABLED", "0") == "1"
         self.hotspot_config = HotspotContainmentConfig(
+            drone_id=self.drone_id,
             enabled=hotspot_enabled,
             network_watchdog_enabled=hotspot_enabled,
-            expected_peer_ids=["drone-2"] if hotspot_enabled else [] # Example default for testing
+            expected_peer_ids=expected_peers if expected_peers is not None else [],
         )
         self.peer_link = PeerLink(self.hotspot_config) if self.hotspot_config.network_watchdog_enabled else None
         
@@ -459,12 +461,24 @@ async def main():
     )
     parser.add_argument("--host", default="0.0.0.0", help="Host IP for socket listener")
     parser.add_argument("--port", type=int, default=5000, help="Port for socket listener")
+    parser.add_argument("--peers", type=str, default="", help="Comma-separated list of expected peer drone IDs")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     
-    brain = EdgeBrain(drone_id=args.drone_id, serial_url=expand_connection_urls(args.connect), host=args.host, port=args.port)
-    
+    expected_peers = []
+    if args.peers:
+        expected_peers = [p.strip() for p in args.peers.split(",") if p.strip()]
+    elif os.environ.get("EDGE_BRAIN_EXPECTED_PEERS"):
+        expected_peers = [p.strip() for p in os.environ["EDGE_BRAIN_EXPECTED_PEERS"].split(",") if p.strip()]
+
+    brain = EdgeBrain(
+        drone_id=args.drone_id, 
+        serial_url=expand_connection_urls(args.connect), 
+        host=args.host, 
+        port=args.port,
+        expected_peers=expected_peers
+    )
     import signal
     import sys
     shutdown_count = 0
